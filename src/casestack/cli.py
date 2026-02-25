@@ -167,6 +167,82 @@ def ask_cmd(question, case_path, api_key):
     console.print(f"\n{answer}")
 
 
+@cli.command("scan-pii")
+@click.option("--case", "case_path", type=click.Path(), default=None)
+@click.option("--min-confidence", type=float, default=0.7)
+def scan_pii(case_path, min_confidence):
+    """Scan the database for personally identifiable information."""
+    from casestack.pii import scan_database
+
+    case = _load_case(case_path)
+    db = case.db_path
+    if not db.exists():
+        console.print("[red]Database not found. Run 'casestack ingest' first.[/red]")
+        sys.exit(1)
+
+    result = scan_database(db)
+
+    # Filter by confidence
+    filtered = [m for m in result.matches if m.confidence >= min_confidence]
+
+    console.print(f"\n[bold]PII Scan Results[/bold]")
+    console.print(f"  Pages scanned: {result.total_pages_scanned:,}")
+    console.print(f"  Matches found: {len(filtered):,} (>= {min_confidence} confidence)")
+    console.print(
+        f"  Affected pages: {len({(m.doc_id, m.page_number) for m in filtered}):,}"
+    )
+
+    by_type: dict[str, int] = {}
+    for m in filtered:
+        by_type[m.pattern_type] = by_type.get(m.pattern_type, 0) + 1
+    for ptype, count in sorted(by_type.items()):
+        console.print(f"    {ptype}: {count}")
+
+
+@cli.command()
+@click.option("--case", "case_path", type=click.Path(), default=None)
+@click.option("--min-confidence", type=float, default=0.8)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would be redacted without changing the database",
+)
+def redact(case_path, min_confidence, dry_run):
+    """Redact PII from the database.
+
+    Scans for PII above the confidence threshold and replaces matches with
+    empty strings.  Use --dry-run to preview without modifying data.
+    """
+    from casestack.pii import redact_database, scan_database
+
+    case = _load_case(case_path)
+    db = case.db_path
+    if not db.exists():
+        console.print("[red]Database not found. Run 'casestack ingest' first.[/red]")
+        sys.exit(1)
+
+    result = scan_database(db)
+    filtered = [m for m in result.matches if m.confidence >= min_confidence]
+
+    if not filtered:
+        console.print("[green]No PII found above confidence threshold.[/green]")
+        return
+
+    console.print(f"\n[bold]PII to redact:[/bold] {len(filtered):,} matches")
+    by_type: dict[str, int] = {}
+    for m in filtered:
+        by_type[m.pattern_type] = by_type.get(m.pattern_type, 0) + 1
+    for ptype, count in sorted(by_type.items()):
+        console.print(f"    {ptype}: {count}")
+
+    if dry_run:
+        console.print("\n[yellow]Dry run — no changes made.[/yellow]")
+        return
+
+    count = redact_database(db, filtered)
+    console.print(f"\n[green]Redacted {count:,} PII items.[/green]")
+
+
 @cli.command()
 @click.option("--case", "case_path", type=click.Path(), default=None)
 def status(case_path):
