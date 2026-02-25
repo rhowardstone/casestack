@@ -8,6 +8,25 @@ import yaml
 from pydantic import BaseModel, Field
 
 
+# Aliases for nested YAML keys (section, key) -> model field
+_ALIASES: dict[tuple[str, str], str] = {
+    ("entities", "types"): "entity_types",
+    ("entities", "registry"): "registry_path",
+    ("entities", "fuzzy_threshold"): "fuzzy_threshold",
+    ("entities", "spacy_model"): "spacy_model",
+    ("dedup", "threshold"): "dedup_threshold",
+    ("dedup", "bates_prefixes"): "bates_prefixes",
+    ("serve", "port"): "serve_port",
+    ("serve", "title"): "serve_title",
+}
+
+# Aliases for 3-level nested keys: section_subsection_key -> model field
+_NESTED_ALIASES: dict[str, str] = {
+    "serve_ask_proxy_enabled": "ask_proxy_enabled",
+    "serve_ask_proxy_openrouter_api_key_env": "openrouter_api_key_env",
+}
+
+
 class CaseConfig(BaseModel):
     """Configuration for a single case/document collection."""
 
@@ -78,17 +97,12 @@ class CaseConfig(BaseModel):
                     # Handle nested dicts (e.g., serve.ask_proxy.enabled)
                     if isinstance(sub_value, dict):
                         for k2, v2 in sub_value.items():
-                            flat[f"{key}_{sub_key}_{k2}"] = v2
+                            nested_key = f"{key}_{sub_key}_{k2}"
+                            nested_alias = _NESTED_ALIASES.get(nested_key, nested_key)
+                            flat[nested_alias] = v2
                         continue
                     # Map nested keys with explicit aliases
-                    alias = {
-                        ("entities", "types"): "entity_types",
-                        ("entities", "registry"): "registry_path",
-                        ("entities", "fuzzy_threshold"): "fuzzy_threshold",
-                        ("dedup", "threshold"): "dedup_threshold",
-                        ("serve", "port"): "serve_port",
-                        ("serve", "title"): "serve_title",
-                    }.get((key, sub_key))
+                    alias = _ALIASES.get((key, sub_key))
                     flat[alias or f"{key}_{sub_key}"] = sub_value
             else:
                 flat[key] = value

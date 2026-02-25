@@ -32,6 +32,23 @@
         .stats { text-align: center; padding: 1rem; color: #888; font-size: 0.9rem; }
         .loading { text-align: center; padding: 2rem; color: #888; display: none; }
         .no-results { text-align: center; padding: 2rem; color: #888; display: none; }
+        .ask-section { max-width: 700px; margin: 0 auto 2rem; padding: 0 1rem; display: none; }
+        .ask-box { display: flex; gap: 0.5rem; }
+        .ask-box input {
+            flex: 1; padding: 0.8rem 1rem; font-size: 1rem;
+            border: 2px solid #ddd; border-radius: 8px;
+            outline: none; transition: border-color 0.2s;
+        }
+        .ask-box input:focus { border-color: #6c5ce7; }
+        .ask-box button {
+            padding: 0.8rem 1.5rem; font-size: 1rem; font-weight: 600;
+            background: #6c5ce7; color: white; border: none; border-radius: 8px;
+            cursor: pointer; transition: background 0.2s;
+        }
+        .ask-box button:hover { background: #5a4bd1; }
+        .ask-box button:disabled { background: #aaa; cursor: not-allowed; }
+        .ask-answer { margin-top: 1rem; background: white; border-radius: 8px; padding: 1.2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); white-space: pre-wrap; line-height: 1.6; display: none; }
+        .ask-label { font-size: 0.85rem; color: #888; margin-bottom: 0.5rem; }
         footer { text-align: center; padding: 2rem; color: #aaa; font-size: 0.85rem; }
         footer a { color: #4a90d9; text-decoration: none; }
     </style>
@@ -55,6 +72,15 @@
                 <li>Use prefix matching: <code>account*</code></li>
             </ul>
         </details>
+    </div>
+
+    <div class="ask-section" id="ask-section">
+        <div class="ask-label">Ask AI about these documents</div>
+        <div class="ask-box">
+            <input type="text" id="ask-input" placeholder="Ask a question about the documents...">
+            <button id="ask-btn">Ask</button>
+        </div>
+        <div class="ask-answer" id="ask-answer"></div>
     </div>
 
     <div class="stats" id="stats"></div>
@@ -149,6 +175,47 @@
     function escapeHtml(str) {
         if (!str) return '';
         return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    // Ask-proxy: detect availability on port+1 and wire up UI
+    const askPort = parseInt(window.location.port || '80') + 1;
+    const askBase = `${window.location.protocol}//${window.location.hostname}:${askPort}`;
+
+    fetch(`${askBase}/api/ask?q=test`, {method: 'HEAD'}).then(() => {
+        document.getElementById('ask-section').style.display = 'block';
+    }).catch(() => {});
+
+    document.getElementById('ask-btn').addEventListener('click', doAsk);
+    document.getElementById('ask-input').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') doAsk();
+    });
+
+    async function doAsk() {
+        const input = document.getElementById('ask-input');
+        const btn = document.getElementById('ask-btn');
+        const answer = document.getElementById('ask-answer');
+        const q = input.value.trim();
+        if (!q) return;
+
+        btn.disabled = true;
+        btn.textContent = 'Thinking...';
+        answer.style.display = 'block';
+        answer.textContent = 'Searching documents and generating answer...';
+
+        try {
+            const resp = await fetch(`${askBase}/api/ask?q=${encodeURIComponent(q)}`);
+            const data = await resp.json();
+            if (data.error) {
+                answer.textContent = `Error: ${data.error}`;
+            } else {
+                answer.textContent = data.answer;
+            }
+        } catch (err) {
+            answer.textContent = `Connection error: ${err.message}`;
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Ask';
+        }
     }
     </script>
 </body>

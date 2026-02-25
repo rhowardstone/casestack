@@ -64,6 +64,46 @@ serve:
     assert config.serve_title == "My Title"
 
 
+def test_nested_ask_proxy_config():
+    yaml_content = """
+name: "Ask Test"
+slug: "ask-test"
+serve:
+  port: 8001
+  ask_proxy:
+    enabled: true
+    openrouter_api_key_env: "MY_KEY"
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write(yaml_content)
+        f.flush()
+        config = CaseConfig.from_yaml(Path(f.name))
+    assert config.ask_proxy_enabled is True
+    assert config.openrouter_api_key_env == "MY_KEY"
+    assert config.serve_port == 8001
+
+
+def test_nested_spacy_model_and_bates():
+    yaml_content = """
+name: "Full"
+slug: "full"
+entities:
+  spacy_model: "en_core_web_lg"
+  fuzzy_threshold: 90
+dedup:
+  threshold: 0.85
+  bates_prefixes: ["EFTA", "DOJ"]
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        f.write(yaml_content)
+        f.flush()
+        config = CaseConfig.from_yaml(Path(f.name))
+    assert config.spacy_model == "en_core_web_lg"
+    assert config.fuzzy_threshold == 90
+    assert config.dedup_threshold == 0.85
+    assert config.bates_prefixes == ["EFTA", "DOJ"]
+
+
 def test_settings_from_case():
     from casestack.config import Settings
 
