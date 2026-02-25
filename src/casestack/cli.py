@@ -138,6 +138,35 @@ def serve(case_path, port, host, immutable):
     subprocess.run(cmd)
 
 
+@cli.command(name="ask")
+@click.argument("question")
+@click.option("--case", "case_path", type=click.Path(), default=None)
+@click.option("--api-key", envvar="OPENROUTER_API_KEY", default=None, help="LLM API key")
+def ask_cmd(question, case_path, api_key):
+    """Ask a question about the document corpus.
+
+    \b
+    Examples:
+      casestack ask "What financial connections exist?"
+      casestack ask "Who traveled together?" --case case.yaml
+      casestack ask "Wire transfers over 100k" --api-key sk-...
+    """
+    import asyncio
+
+    from casestack.ask import ask
+
+    case = _load_case(case_path)
+    db = case.db_path
+    if not db.exists():
+        console.print("[red]Database not found. Run 'casestack ingest' first.[/red]")
+        sys.exit(1)
+
+    with console.status("[bold cyan]Thinking...[/bold cyan]"):
+        answer = asyncio.run(ask(question, db, api_key=api_key))
+
+    console.print(f"\n{answer}")
+
+
 @cli.command()
 @click.option("--case", "case_path", type=click.Path(), default=None)
 def status(case_path):
