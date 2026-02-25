@@ -150,9 +150,12 @@ def serve(case_path, port, host, immutable):
     if case.ask_proxy_enabled:
         import os
         import threading
+        import time
 
         ask_port = serve_port + 1
         api_key = os.environ.get(case.openrouter_api_key_env)
+        ask_ready = threading.Event()
+        ask_failed = threading.Event()
 
         def _run_ask_proxy():
             try:
@@ -161,17 +164,29 @@ def serve(case_path, port, host, immutable):
                 from casestack.ask_server import create_ask_app
 
                 app = create_ask_app(db_path=db, api_key=api_key)
+                ask_ready.set()
                 uvicorn.run(app, host=host, port=ask_port, log_level="warning")
             except ImportError:
                 console.print(
-                    "[yellow]Ask proxy requires uvicorn. Install with: pip install uvicorn[/yellow]"
+                    "[yellow]Ask proxy requires starlette + uvicorn. "
+                    "Install with: pip install 'casestack[ask]'[/yellow]"
                 )
+                ask_failed.set()
             except Exception as exc:
-                console.print(f"[red]Ask proxy error: {exc}[/red]")
+                console.print(f"[red]Ask proxy failed to start: {exc}[/red]")
+                ask_failed.set()
 
         thread = threading.Thread(target=_run_ask_proxy, daemon=True)
         thread.start()
-        console.print(f"  Ask proxy: http://{host}:{ask_port}/api/ask?q=your+question")
+
+        # Wait briefly for startup or failure
+        ready = ask_ready.wait(timeout=2)
+        if ask_failed.is_set():
+            console.print("  [yellow]Ask proxy disabled due to startup error[/yellow]")
+        elif ready:
+            console.print(f"  Ask proxy: http://{host}:{ask_port}/api/ask?q=your+question")
+        else:
+            console.print("  [yellow]Ask proxy starting (slow startup)[/yellow]")
 
     subprocess.run(cmd)
 

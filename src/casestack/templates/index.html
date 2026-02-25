@@ -181,8 +181,8 @@
     const askPort = parseInt(window.location.port || '80') + 1;
     const askBase = `${window.location.protocol}//${window.location.hostname}:${askPort}`;
 
-    fetch(`${askBase}/api/ask?q=test`, {method: 'HEAD'}).then(() => {
-        document.getElementById('ask-section').style.display = 'block';
+    fetch(`${askBase}/api/health`).then(r => {
+        if (r.ok) document.getElementById('ask-section').style.display = 'block';
     }).catch(() => {});
 
     document.getElementById('ask-btn').addEventListener('click', doAsk);

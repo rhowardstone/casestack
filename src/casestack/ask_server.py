@@ -1,7 +1,7 @@
 """HTTP endpoint for the CaseStack ask-proxy.
 
-A simple ASGI app (Starlette) that exposes /api/ask for the web UI.
-Can run alongside Datasette or be mounted as a sub-application.
+A simple ASGI app (Starlette) that exposes /api/ask for the web UI
+and /api/health for availability probes.
 
 Usage::
 
@@ -18,9 +18,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
+
+
+async def health_endpoint(request: Request) -> JSONResponse:
+    """Lightweight probe — no LLM calls, no DB queries."""
+    return JSONResponse({"status": "ok"})
 
 
 async def ask_endpoint(request: Request) -> JSONResponse:
@@ -55,8 +62,9 @@ async def ask_endpoint(request: Request) -> JSONResponse:
 def create_ask_app(
     db_path: Path,
     api_key: str | None = None,
+    allowed_origins: list[str] | None = None,
 ) -> Starlette:
-    """Create a Starlette ASGI app with the /api/ask endpoint.
+    """Create a Starlette ASGI app with /api/ask and /api/health endpoints.
 
     Parameters
     ----------
@@ -64,14 +72,27 @@ def create_ask_app(
         Path to the CaseStack SQLite database.
     api_key:
         Optional API key for the LLM provider.
-
-    Returns
-    -------
-    Starlette
-        An ASGI application ready to be served.
+    allowed_origins:
+        CORS origins to allow.  Defaults to ``["*"]`` (any origin)
+        which is safe here because the ask endpoint is read-only and
+        auth is handled via the API key, not cookies.
     """
+    if allowed_origins is None:
+        allowed_origins = ["*"]
+
     app = Starlette(
-        routes=[Route("/api/ask", ask_endpoint)],
+        routes=[
+            Route("/api/health", health_endpoint),
+            Route("/api/ask", ask_endpoint),
+        ],
+        middleware=[
+            Middleware(
+                CORSMiddleware,
+                allow_origins=allowed_origins,
+                allow_methods=["GET"],
+                allow_headers=["*"],
+            ),
+        ],
     )
     app.state.db_path = db_path
     app.state.api_key = api_key

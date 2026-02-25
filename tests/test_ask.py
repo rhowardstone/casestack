@@ -511,3 +511,103 @@ class TestAskCLI:
         result = runner.invoke(cli, ["ask", "--help"])
         assert result.exit_code == 0
         assert "Ask a question" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Ask server integration tests (health, CORS, routing)
+# ---------------------------------------------------------------------------
+
+
+class TestAskServer:
+    """Integration tests for the ask ASGI server."""
+
+    @pytest.fixture()
+    def test_db(self, tmp_path):
+        """Create a minimal test database."""
+        db = tmp_path / "test.db"
+        conn = sqlite3.connect(str(db))
+        conn.executescript("""
+            CREATE TABLE documents (
+                id INTEGER PRIMARY KEY, doc_id TEXT UNIQUE, title TEXT,
+                date TEXT, source TEXT, category TEXT, summary TEXT,
+                total_pages INTEGER, total_chars INTEGER, file_path TEXT, tags TEXT
+            );
+            CREATE TABLE pages (
+                id INTEGER PRIMARY KEY, document_id INTEGER REFERENCES documents(id),
+                doc_id TEXT NOT NULL, page_number INTEGER NOT NULL,
+                text_content TEXT NOT NULL, char_count INTEGER NOT NULL
+            );
+            CREATE VIRTUAL TABLE pages_fts USING fts5(
+                text_content, content='pages', content_rowid='id'
+            );
+            INSERT INTO documents (doc_id, title, source, category, total_pages, total_chars)
+                VALUES ('doc1', 'Test Doc', 'local', 'test', 1, 20);
+            INSERT INTO pages (document_id, doc_id, page_number, text_content, char_count)
+                VALUES (1, 'doc1', 1, 'The quick brown fox jumps over the lazy dog', 43);
+            INSERT INTO pages_fts(rowid, text_content)
+                VALUES (1, 'The quick brown fox jumps over the lazy dog');
+        """)
+        conn.commit()
+        conn.close()
+        return db
+
+    @pytest.fixture()
+    def client(self, test_db):
+        """Create a Starlette test client."""
+        from starlette.testclient import TestClient
+
+        from casestack.ask_server import create_ask_app
+
+        app = create_ask_app(db_path=test_db, api_key="test-key")
+        return TestClient(app)
+
+    def test_health_endpoint(self, client):
+        resp = client.get("/api/health")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+
+    def test_health_has_cors_headers(self, client):
+        resp = client.get(
+            "/api/health",
+            headers={"Origin": "http://localhost:8001"},
+        )
+        assert resp.status_code == 200
+        assert "access-control-allow-origin" in resp.headers
+
+    def test_cors_preflight(self, client):
+        resp = client.options(
+            "/api/ask",
+            headers={
+                "Origin": "http://localhost:8001",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        # CORSMiddleware should respond to preflight
+        assert resp.status_code == 200
+        assert "access-control-allow-origin" in resp.headers
+
+    def test_ask_missing_query(self, client):
+        resp = client.get("/api/ask")
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "Missing ?q= parameter"
+
+    def test_ask_empty_query(self, client):
+        resp = client.get("/api/ask?q=")
+        assert resp.status_code == 400
+
+    @patch("casestack.ask.call_llm")
+    def test_ask_returns_answer(self, mock_llm, client):
+        mock_llm.return_value = '{"queries": ["fox"]}'
+
+        async def side_effect(*args, **kwargs):
+            call_count = mock_llm.call_count
+            if call_count <= 1:
+                return '{"queries": ["fox"]}'
+            return "The fox is quick."
+
+        mock_llm.side_effect = side_effect
+        resp = client.get("/api/ask?q=tell+me+about+the+fox")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "answer" in data
+        assert data["question"] == "tell me about the fox"
