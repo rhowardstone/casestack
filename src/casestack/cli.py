@@ -41,15 +41,18 @@ def cli():
 
 @cli.command()
 @click.argument(
-    "documents_dir", type=click.Path(exists=True, file_okay=False, path_type=Path)
+    "documents_dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    required=False,
+    default=None,
 )
-@click.option("--name", "-n", required=True, help="Case name")
+@click.option("--name", "-n", default=None, help="Case name")
 @click.option(
     "--case",
     "case_path",
     type=click.Path(path_type=Path),
     default=None,
-    help="Path to case.yaml (overrides --name and documents_dir)",
+    help="Path to case.yaml (provides all config; no documents_dir or --name needed)",
 )
 @click.option("--skip-ocr", is_flag=True, help="Skip OCR step")
 @click.option("--skip-entities", is_flag=True, help="Skip entity extraction")
@@ -59,12 +62,19 @@ def ingest(documents_dir, name, case_path, skip_ocr, skip_entities, skip_dedup):
 
     \b
     Examples:
+      casestack ingest --case case.yaml
       casestack ingest ./my-pdfs --name "City Council FOIA"
-      casestack ingest ./documents --case case.yaml
     """
     if case_path:
         case = _load_case(str(case_path))
     else:
+        if not documents_dir:
+            console.print("[red]Provide DOCUMENTS_DIR or use --case case.yaml[/red]")
+            sys.exit(1)
+        if not name:
+            # Derive name from directory
+            name = documents_dir.name.replace("-", " ").replace("_", " ").title()
+
         from casestack.case import CaseConfig
 
         slug = (
@@ -135,6 +145,34 @@ def serve(case_path, port, host, immutable):
     console.print(f"[bold]Serving[/bold] {db.name} at http://{host}:{serve_port}")
     if immutable:
         console.print("  [dim]Immutable mode (read-only)[/dim]")
+
+    # Start ask-proxy alongside Datasette if enabled
+    if case.ask_proxy_enabled:
+        import os
+        import threading
+
+        ask_port = serve_port + 1
+        api_key = os.environ.get(case.openrouter_api_key_env)
+
+        def _run_ask_proxy():
+            try:
+                import uvicorn
+
+                from casestack.ask_server import create_ask_app
+
+                app = create_ask_app(db_path=db, api_key=api_key)
+                uvicorn.run(app, host=host, port=ask_port, log_level="warning")
+            except ImportError:
+                console.print(
+                    "[yellow]Ask proxy requires uvicorn. Install with: pip install uvicorn[/yellow]"
+                )
+            except Exception as exc:
+                console.print(f"[red]Ask proxy error: {exc}[/red]")
+
+        thread = threading.Thread(target=_run_ask_proxy, daemon=True)
+        thread.start()
+        console.print(f"  Ask proxy: http://{host}:{ask_port}/api/ask?q=your+question")
+
     subprocess.run(cmd)
 
 

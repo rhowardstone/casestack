@@ -69,23 +69,27 @@ class CaseConfig(BaseModel):
         Which get flattened to ocr_backend, ocr_workers.
         """
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError(f"Invalid case config: {path} (expected YAML mapping, got {type(raw).__name__})")
         flat: dict = {}
         for key, value in raw.items():
             if isinstance(value, dict) and key in ("ocr", "serve", "entities", "dedup"):
                 for sub_key, sub_value in value.items():
-                    # Map nested keys: ocr.backend -> ocr_backend, entities.types -> entity_types
-                    if key == "entities" and sub_key == "types":
-                        flat["entity_types"] = sub_value
-                    elif key == "entities" and sub_key == "registry":
-                        flat["registry_path"] = sub_value
-                    elif key == "dedup" and sub_key == "threshold":
-                        flat["dedup_threshold"] = sub_value
-                    elif key == "serve" and sub_key == "port":
-                        flat["serve_port"] = sub_value
-                    elif key == "serve" and sub_key == "title":
-                        flat["serve_title"] = sub_value
-                    else:
-                        flat[f"{key}_{sub_key}"] = sub_value
+                    # Handle nested dicts (e.g., serve.ask_proxy.enabled)
+                    if isinstance(sub_value, dict):
+                        for k2, v2 in sub_value.items():
+                            flat[f"{key}_{sub_key}_{k2}"] = v2
+                        continue
+                    # Map nested keys with explicit aliases
+                    alias = {
+                        ("entities", "types"): "entity_types",
+                        ("entities", "registry"): "registry_path",
+                        ("entities", "fuzzy_threshold"): "fuzzy_threshold",
+                        ("dedup", "threshold"): "dedup_threshold",
+                        ("serve", "port"): "serve_port",
+                        ("serve", "title"): "serve_title",
+                    }.get((key, sub_key))
+                    flat[alias or f"{key}_{sub_key}"] = sub_value
             else:
                 flat[key] = value
         return cls(**flat)
