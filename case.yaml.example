@@ -1,0 +1,35 @@
+# CaseStack case configuration
+# Copy this to case.yaml and customize for your document set.
+
+name: "My Case"
+slug: "my-case"
+description: "Description of this document collection"
+
+# Where raw documents live (PDFs, images, audio/video)
+documents_dir: "./documents"
+
+# Processing options
+ocr:
+  backend: "pymupdf"        # "docling", "pymupdf", or "both"
+  workers: 4
+
+entities:
+  spacy_model: "en_core_web_sm"
+  types: ["PERSON", "ORG", "GPE", "DATE", "MONEY", "PHONE", "EMAIL_ADDR"]
+  # Optional: path to a JSON person registry for fuzzy matching
+  # registry: "./data/persons-registry.json"
+  # fuzzy_threshold: 85
+
+dedup:
+  threshold: 0.90
+
+# Bates number prefixes for dedup overlap detection (optional)
+# bates_prefixes: ["EFTA", "DOJ"]
+
+# Serving
+serve:
+  port: 8001
+  title: "My Case — Document Database"
+  # ask_proxy:
+  #   enabled: true
+  #   openrouter_api_key_env: "OPENROUTER_API_KEY"
