@@ -242,6 +242,7 @@ def _generate_datasette_config(case: CaseConfig, db_path: Path) -> None:
             "default_page_size": 50,
             "allow_download": False,
             "suggest_facets": False,
+            "allow_sql": True,
         },
         "databases": {
             case.slug: {
@@ -249,6 +250,12 @@ def _generate_datasette_config(case: CaseConfig, db_path: Path) -> None:
                     "documents": {
                         "label_column": "title",
                         "description": "All processed documents",
+                    },
+                    "pages": {
+                        "description": "Per-page text content",
+                    },
+                    "pages_fts": {
+                        "hidden": True,
                     },
                 },
             }

@@ -81,13 +81,15 @@ def ingest(documents_dir, name, case_path, skip_ocr, skip_entities, skip_dedup):
 @click.option("--case", "case_path", type=click.Path(), default=None)
 @click.option("--port", "-p", type=int, default=None)
 @click.option("--host", type=str, default="127.0.0.1")
-def serve(case_path, port, host):
+@click.option("--immutable", "-i", is_flag=True, help="Open database in immutable (read-only) mode")
+def serve(case_path, port, host, immutable):
     """Serve the case database with Datasette.
 
     \b
     Examples:
       casestack serve
       casestack serve --case case.yaml --port 8080
+      casestack serve --immutable
     """
     case = _load_case(case_path)
     db = case.db_path
@@ -99,6 +101,11 @@ def serve(case_path, port, host):
     ds_config = case.output_dir / "datasette.yaml"
     serve_port = port or case.serve_port
 
+    # Locate bundled templates directory
+    import importlib.resources
+
+    templates_dir = importlib.resources.files("casestack") / "templates"
+
     cmd = [
         sys.executable,
         "-m",
@@ -109,11 +116,25 @@ def serve(case_path, port, host):
         host,
         "-p",
         str(serve_port),
+        "--setting",
+        "sql_time_limit_ms",
+        "15000",
     ]
+
+    if templates_dir.is_dir():
+        cmd.extend(["--template-dir", str(templates_dir)])
+
     if ds_config.exists():
         cmd.extend(["--metadata", str(ds_config)])
 
+    if immutable:
+        # Replace the plain db path with -i flag for immutable mode
+        db_index = cmd.index(str(db))
+        cmd[db_index:db_index + 1] = ["-i", str(db)]
+
     console.print(f"[bold]Serving[/bold] {db.name} at http://{host}:{serve_port}")
+    if immutable:
+        console.print("  [dim]Immutable mode (read-only)[/dim]")
     subprocess.run(cmd)
 
 

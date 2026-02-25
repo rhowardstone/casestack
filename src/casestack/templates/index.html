@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ metadata.title or "CaseStack" }}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, system-ui, sans-serif; background: #f5f5f5; color: #333; }
+        .header { background: #1a1a2e; color: white; padding: 2rem; text-align: center; }
+        .header h1 { font-size: 1.8rem; margin-bottom: 0.5rem; }
+        .header p { opacity: 0.8; }
+        .search-box { max-width: 700px; margin: 2rem auto; padding: 0 1rem; }
+        .search-box input {
+            width: 100%; padding: 1rem 1.5rem; font-size: 1.1rem;
+            border: 2px solid #ddd; border-radius: 8px;
+            outline: none; transition: border-color 0.2s;
+        }
+        .search-box input:focus { border-color: #4a90d9; }
+        .search-help { max-width: 700px; margin: 0 auto 2rem; padding: 0 1rem; }
+        .search-help details { background: white; border-radius: 8px; padding: 1rem; }
+        .search-help summary { cursor: pointer; font-weight: 600; }
+        .search-help ul { margin: 0.5rem 0 0 1.5rem; }
+        .search-help code { background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+        .results { max-width: 900px; margin: 0 auto; padding: 0 1rem 2rem; }
+        .result { background: white; border-radius: 8px; padding: 1.2rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .result-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 0.5rem; }
+        .result-title { font-weight: 600; color: #1a1a2e; }
+        .result-page { font-size: 0.85rem; color: #666; }
+        .result-snippet { font-size: 0.95rem; line-height: 1.5; color: #555; }
+        .result-snippet mark { background: #fff3cd; padding: 1px 2px; }
+        .stats { text-align: center; padding: 1rem; color: #888; font-size: 0.9rem; }
+        .loading { text-align: center; padding: 2rem; color: #888; display: none; }
+        .no-results { text-align: center; padding: 2rem; color: #888; display: none; }
+        footer { text-align: center; padding: 2rem; color: #aaa; font-size: 0.85rem; }
+        footer a { color: #4a90d9; text-decoration: none; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{{ metadata.title or "CaseStack" }}</h1>
+        <p>{{ metadata.description or "Document Intelligence Platform" }}</p>
+    </div>
+
+    <div class="search-box">
+        <input type="text" id="search" placeholder="Search documents..." autofocus>
+    </div>
+
+    <div class="search-help">
+        <details>
+            <summary>Search tips</summary>
+            <ul>
+                <li>Use quotes for exact phrases: <code>"wire transfer"</code></li>
+                <li>Use AND/OR: <code>bank AND offshore</code></li>
+                <li>Use prefix matching: <code>account*</code></li>
+            </ul>
+        </details>
+    </div>
+
+    <div class="stats" id="stats"></div>
+    <div class="loading" id="loading">Searching...</div>
+    <div class="no-results" id="no-results">No results found.</div>
+    <div class="results" id="results"></div>
+
+    <footer>
+        Powered by <a href="https://github.com/rhowardstone/casestack">CaseStack</a> + <a href="https://datasette.io">Datasette</a>
+    </footer>
+
+    <script>
+    const DB = "{{ database or databases.keys()|first }}";
+    let searchTimeout;
+
+    document.getElementById('search').addEventListener('input', function() {
+        clearTimeout(searchTimeout);
+        const q = this.value.trim();
+        if (q.length < 2) {
+            document.getElementById('results').innerHTML = '';
+            document.getElementById('stats').textContent = '';
+            document.getElementById('no-results').style.display = 'none';
+            return;
+        }
+        searchTimeout = setTimeout(() => doSearch(q), 300);
+    });
+
+    document.getElementById('search').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            clearTimeout(searchTimeout);
+            const q = this.value.trim();
+            if (q.length >= 2) doSearch(q);
+        }
+    });
+
+    async function doSearch(query) {
+        const loading = document.getElementById('loading');
+        const results = document.getElementById('results');
+        const stats = document.getElementById('stats');
+        const noResults = document.getElementById('no-results');
+
+        loading.style.display = 'block';
+        results.innerHTML = '';
+        stats.textContent = '';
+        noResults.style.display = 'none';
+
+        try {
+            const sql = `
+                SELECT
+                    d.doc_id,
+                    d.title,
+                    p.page_number,
+                    snippet(pages_fts, 0, '<mark>', '</mark>', '...', 64) as snippet,
+                    d.total_pages
+                FROM pages_fts
+                JOIN pages p ON p.rowid = pages_fts.rowid
+                JOIN documents d ON d.id = p.document_id
+                WHERE pages_fts MATCH :query
+                ORDER BY rank
+                LIMIT 50
+            `;
+
+            const url = `/${DB}.json?sql=${encodeURIComponent(sql)}&query=${encodeURIComponent(query)}&_shape=array`;
+            const resp = await fetch(url);
+            const data = await resp.json();
+
+            loading.style.display = 'none';
+
+            if (!data.length) {
+                noResults.style.display = 'block';
+                return;
+            }
+
+            stats.textContent = `${data.length} result${data.length === 1 ? '' : 's'} found`;
+
+            results.innerHTML = data.map(row => `
+                <div class="result">
+                    <div class="result-header">
+                        <span class="result-title">${escapeHtml(row.title || row.doc_id)}</span>
+                        <span class="result-page">Page ${row.page_number}${row.total_pages ? ' of ' + row.total_pages : ''}</span>
+                    </div>
+                    <div class="result-snippet">${row.snippet}</div>
+                </div>
+            `).join('');
+
+        } catch (err) {
+            loading.style.display = 'none';
+            results.innerHTML = `<div class="result" style="color:red">Search error: ${escapeHtml(err.message)}</div>`;
+        }
+    }
+
+    function escapeHtml(str) {
+        if (!str) return '';
+        return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+    </script>
+</body>
+</html>
