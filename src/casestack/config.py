@@ -44,6 +44,31 @@ class Settings(BaseSettings):
     embedding_batch_size: int | None = None  # None = auto-detect
     embedding_device: str | None = None  # None = auto-detect
 
+    @classmethod
+    def from_case(cls, case: "CaseConfig") -> "Settings":
+        """Create Settings from a CaseConfig.
+
+        This bridges the per-case YAML configuration into the flat Settings
+        object that processors expect.
+        """
+        from casestack.case import CaseConfig  # noqa: F811
+
+        return cls(
+            data_dir=case.data_dir,
+            output_dir=case.output_dir,
+            cache_dir=case.cache_dir,
+            persons_registry_path=(
+                case.registry_path
+                or case.data_dir / "persons-registry.json"
+            ),
+            spacy_model=case.spacy_model,
+            dedup_threshold=case.dedup_threshold,
+            max_workers=case.ocr_workers,
+            ocr_backend=case.ocr_backend,
+            embedding_model=case.embedding_model,
+            embedding_dimensions=case.embedding_dimensions,
+        )
+
     def ensure_dirs(self) -> None:
         """Create data, output, and cache directories if they don't exist."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
