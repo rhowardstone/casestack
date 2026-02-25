@@ -8,10 +8,13 @@ recovered text, transcripts, extracted entities, and extracted images.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 
 from rich.console import Console
+
+logger = logging.getLogger(__name__)
 
 from casestack.models.document import Document, Page, Person
 from casestack.models.forensics import (
@@ -45,10 +48,11 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE TABLE IF NOT EXISTS pages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     document_id INTEGER REFERENCES documents(id),
-    doc_id TEXT,
-    page_number INTEGER,
-    text_content TEXT,
-    char_count INTEGER
+    doc_id TEXT NOT NULL,
+    page_number INTEGER NOT NULL,
+    text_content TEXT NOT NULL,
+    char_count INTEGER NOT NULL,
+    UNIQUE(doc_id, page_number)
 );
 
 CREATE TABLE IF NOT EXISTS persons (
@@ -146,7 +150,7 @@ CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
 END;
 
 -- Indices
-CREATE INDEX IF NOT EXISTS idx_pages_doc ON pages(doc_id);
+CREATE INDEX IF NOT EXISTS idx_pages_doc_page ON pages(doc_id, page_number);
 CREATE INDEX IF NOT EXISTS idx_pages_docid ON pages(document_id);
 CREATE INDEX IF NOT EXISTS idx_documents_source ON documents(source);
 CREATE INDEX IF NOT EXISTS idx_documents_category ON documents(category);
@@ -219,6 +223,7 @@ class SqliteExporter:
 
         conn = sqlite3.connect(str(db_path))
         try:
+            conn.execute("PRAGMA foreign_keys = ON")
             conn.executescript(_SCHEMA_SQL)
 
             self._insert_persons(conn, persons)
@@ -288,7 +293,6 @@ class SqliteExporter:
             " VALUES (?, ?, ?, ?, ?, ?)",
             rows,
         )
-        conn.commit()
         self._console.print(f"  [dim]Inserted {len(rows):,} persons[/dim]")
 
     def _insert_documents(
@@ -334,7 +338,6 @@ class SqliteExporter:
             if row:
                 doc_id_map[doc.id] = row[0]
 
-        conn.commit()
         self._console.print(f"  [dim]Inserted {len(documents):,} documents[/dim]")
         return doc_id_map
 
@@ -345,23 +348,27 @@ class SqliteExporter:
         doc_id_map: dict[str, int],
     ) -> None:
         """Insert pages with both document_id (int FK) and doc_id (text for joins)."""
-        rows = [
-            (
-                doc_id_map.get(p.document_id),
-                p.document_id,
-                p.page_number,
-                p.text_content,
-                p.char_count,
-            )
-            for p in pages
-        ]
+        rows = []
+        skipped = 0
+        for p in pages:
+            fk = doc_id_map.get(p.document_id)
+            if fk is None:
+                logger.warning(
+                    "Page for unknown document_id=%s, page=%d — skipping",
+                    p.document_id,
+                    p.page_number,
+                )
+                skipped += 1
+                continue
+            rows.append((fk, p.document_id, p.page_number, p.text_content, p.char_count))
         conn.executemany(
             """INSERT INTO pages
                (document_id, doc_id, page_number, text_content, char_count)
                VALUES (?, ?, ?, ?, ?)""",
             rows,
         )
-        conn.commit()
+        if skipped:
+            self._console.print(f"  [yellow]Skipped {skipped} orphan pages[/yellow]")
         self._console.print(f"  [dim]Inserted {len(rows):,} pages[/dim]")
 
     def _insert_document_persons(
@@ -374,7 +381,6 @@ class SqliteExporter:
                 " VALUES (?, ?)",
                 rows,
             )
-            conn.commit()
         self._console.print(f"  [dim]Inserted {len(rows):,} document-person links[/dim]")
 
     # ------------------------------------------------------------------
@@ -402,7 +408,6 @@ class SqliteExporter:
                VALUES (?, ?, ?, ?, ?, ?)""",
             rows,
         )
-        conn.commit()
         self._console.print(f"  [dim]Inserted {len(rows):,} redaction scores[/dim]")
 
     def _insert_recovered_text(
@@ -415,7 +420,6 @@ class SqliteExporter:
             " VALUES (?, ?, ?, ?)",
             rows,
         )
-        conn.commit()
         self._console.print(f"  [dim]Inserted {len(rows):,} recovered text entries[/dim]")
 
     def _insert_transcripts(
@@ -431,7 +435,6 @@ class SqliteExporter:
                VALUES (?, ?, ?, ?, ?)""",
             rows,
         )
-        conn.commit()
         self._console.print(f"  [dim]Inserted {len(rows):,} transcripts[/dim]")
 
     def _insert_entities(
@@ -447,7 +450,6 @@ class SqliteExporter:
             " VALUES (?, ?, ?, ?, ?)",
             rows,
         )
-        conn.commit()
         self._console.print(f"  [dim]Inserted {len(rows):,} entities[/dim]")
 
     def _insert_images(
@@ -474,5 +476,4 @@ class SqliteExporter:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             rows,
         )
-        conn.commit()
         self._console.print(f"  [dim]Inserted {len(rows):,} images[/dim]")
