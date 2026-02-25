@@ -31,8 +31,16 @@ async def health_endpoint(request: Request) -> JSONResponse:
 
 
 async def ask_endpoint(request: Request) -> JSONResponse:
-    """Handle GET /api/ask?q=<question>."""
-    question = request.query_params.get("q", "").strip()
+    """Handle GET /api/ask?q=<question> or POST /api/ask with JSON body."""
+    if request.method == "POST":
+        try:
+            body = await request.json()
+            question = body.get("q", "").strip()
+        except Exception:
+            return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    else:
+        question = request.query_params.get("q", "").strip()
+
     if not question:
         return JSONResponse(
             {"error": "Missing ?q= parameter"},
@@ -83,13 +91,13 @@ def create_ask_app(
     app = Starlette(
         routes=[
             Route("/api/health", health_endpoint),
-            Route("/api/ask", ask_endpoint),
+            Route("/api/ask", ask_endpoint, methods=["GET", "POST"]),
         ],
         middleware=[
             Middleware(
                 CORSMiddleware,
                 allow_origins=allowed_origins,
-                allow_methods=["GET"],
+                allow_methods=["GET", "POST", "OPTIONS"],
                 allow_headers=["*"],
             ),
         ],

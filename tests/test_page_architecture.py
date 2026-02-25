@@ -473,3 +473,62 @@ class TestRoundTripIngest:
             ).fetchone()
             assert row[0] == 3
             conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Docling page splitting tests
+# ---------------------------------------------------------------------------
+
+
+class TestDoclingPageSplitting:
+    """Test the _split_docling_pages helper."""
+
+    def test_form_feed_split(self):
+        from casestack.processors.ocr import _split_docling_pages
+
+        text = "Page one content\fPage two content\fPage three content"
+        pages = _split_docling_pages(text, "doc1")
+        assert len(pages) == 3
+        assert pages[0].page_number == 1
+        assert pages[1].page_number == 2
+        assert pages[2].page_number == 3
+        assert "one" in pages[0].text_content
+        assert "three" in pages[2].text_content
+
+    def test_section_break_split(self):
+        from casestack.processors.ocr import _split_docling_pages
+
+        # Create text with section breaks, each chunk > 200 chars
+        chunk = "A" * 250
+        text = f"{chunk}\n\n{chunk}\n\n{chunk}"
+        pages = _split_docling_pages(text, "doc1")
+        assert len(pages) == 3
+        for p in pages:
+            assert p.document_id == "doc1"
+
+    def test_short_chunks_merged(self):
+        from casestack.processors.ocr import _split_docling_pages
+
+        # Short chunks should be merged together
+        text = "Short.\n\nAlso short.\n\nStill short."
+        pages = _split_docling_pages(text, "doc1")
+        # All are under 200 chars, so they merge into 1 page
+        assert len(pages) == 1
+        assert "Short" in pages[0].text_content
+        assert "Also short" in pages[0].text_content
+
+    def test_empty_text_returns_single_page(self):
+        from casestack.processors.ocr import _split_docling_pages
+
+        pages = _split_docling_pages("", "doc1")
+        assert len(pages) == 1
+        assert pages[0].page_number == 1
+
+    def test_mixed_long_short_chunks(self):
+        from casestack.processors.ocr import _split_docling_pages
+
+        long = "X" * 300
+        text = f"{long}\n\nshort\n\n{long}"
+        pages = _split_docling_pages(text, "doc1")
+        # First long chunk -> page 1, "short" merges with second long -> page 2
+        assert len(pages) == 2

@@ -595,6 +595,31 @@ class TestAskServer:
         resp = client.get("/api/ask?q=")
         assert resp.status_code == 400
 
+    def test_ask_post_with_json_body(self, client):
+        resp = client.post("/api/ask", json={"q": ""})
+        assert resp.status_code == 400
+
+    def test_ask_post_missing_q(self, client):
+        resp = client.post("/api/ask", json={})
+        assert resp.status_code == 400
+
+    def test_ask_post_invalid_json(self, client):
+        resp = client.post("/api/ask", content=b"not json", headers={"content-type": "application/json"})
+        assert resp.status_code == 400
+
+    @patch("casestack.ask.call_llm")
+    def test_ask_post_returns_answer(self, mock_llm, client):
+        async def side_effect(*args, **kwargs):
+            call_count = mock_llm.call_count
+            if call_count <= 1:
+                return '{"queries": ["fox"]}'
+            return "The fox is quick."
+
+        mock_llm.side_effect = side_effect
+        resp = client.post("/api/ask", json={"q": "tell me about the fox"})
+        assert resp.status_code == 200
+        assert "answer" in resp.json()
+
     @patch("casestack.ask.call_llm")
     def test_ask_returns_answer(self, mock_llm, client):
         mock_llm.return_value = '{"queries": ["fox"]}'

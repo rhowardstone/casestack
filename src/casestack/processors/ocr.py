@@ -28,6 +28,52 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+_DOCLING_PAGE_BREAK = "\f"
+_DOCLING_SECTION_BREAK = "\n\n"
+_MIN_PAGE_CHARS = 200  # Don't create pages shorter than this from heuristic splits
+
+
+def _split_docling_pages(text: str, doc_id: str) -> list[Page]:
+    """Split Docling output into per-page Page objects.
+
+    Strategy:
+    1. If form-feed characters (\\f) are present, split on those (real page breaks).
+    2. Otherwise split on double-newline section breaks, merging short fragments
+       so pages aren't tiny.
+    """
+    # Try form-feed split first
+    if _DOCLING_PAGE_BREAK in text:
+        chunks = [c for c in text.split(_DOCLING_PAGE_BREAK) if c.strip()]
+    else:
+        # Heuristic: split on section breaks, merge small chunks
+        raw_chunks = text.split(_DOCLING_SECTION_BREAK)
+        chunks: list[str] = []
+        current = ""
+        for chunk in raw_chunks:
+            if not chunk.strip():
+                continue
+            if current and len(current) >= _MIN_PAGE_CHARS:
+                chunks.append(current)
+                current = chunk
+            else:
+                current = (current + _DOCLING_SECTION_BREAK + chunk).strip() if current else chunk
+        if current.strip():
+            chunks.append(current)
+
+    if not chunks:
+        return [Page(document_id=doc_id, page_number=1, text_content=text, char_count=len(text))]
+
+    return [
+        Page(
+            document_id=doc_id,
+            page_number=i + 1,
+            text_content=chunk,
+            char_count=len(chunk),
+        )
+        for i, chunk in enumerate(chunks)
+    ]
+
+
 def _process_single_ocr(args: tuple[str, str, str]) -> ProcessingResult:
     """Process a single PDF file for OCR.
 
@@ -93,14 +139,12 @@ def _process_single_ocr(args: tuple[str, str, str]) -> ProcessingResult:
                 warnings.append(f"Docling produced empty text for {path.name}")
                 md_text = ""
             else:
-                # Docling doesn't provide per-page text easily;
-                # create a single Page containing all text.
-                page_objects = [Page(
-                    document_id=doc_id,
-                    page_number=1,
-                    text_content=md_text,
-                    char_count=len(md_text),
-                )]
+                # Docling doesn't expose native page boundaries.
+                # Split on form-feed characters if present (some PDFs
+                # include them), otherwise fall back to splitting on
+                # double-newline markdown section breaks so that large
+                # documents don't collapse into a single page.
+                page_objects = _split_docling_pages(md_text, doc_id)
         except ImportError:
             errors.append("Docling not installed. Install with: pip install docling")
         except Exception as exc:
