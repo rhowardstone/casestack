@@ -1,9 +1,9 @@
 """SQLite exporter for CaseStack.
 
-Creates a self-contained SQLite database with documents, persons, and a
-many-to-many join table.  Includes FTS5 full-text search and additional
-tables for redaction scores, recovered text, transcripts, extracted
-entities, and extracted images.
+Creates a self-contained SQLite database with documents, pages (per-page text),
+persons, and a many-to-many join table.  Includes FTS5 full-text search on the
+pages table for page-level search, plus additional tables for redaction scores,
+recovered text, transcripts, extracted entities, and extracted images.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from pathlib import Path
 
 from rich.console import Console
 
-from casestack.models.document import Document, Person
+from casestack.models.document import Document, Page, Person
 from casestack.models.forensics import (
     ExtractedEntity,
     ExtractedImage,
@@ -29,143 +29,143 @@ from casestack.models.forensics import (
 _SCHEMA_SQL = """
 -- Core tables
 CREATE TABLE IF NOT EXISTS documents (
-    id            TEXT PRIMARY KEY,
-    title         TEXT NOT NULL,
-    date          TEXT,
-    source        TEXT NOT NULL,
-    category      TEXT NOT NULL,
-    summary       TEXT,
-    pdf_url       TEXT,
-    source_url    TEXT,
-    archive_url   TEXT,
-    page_count    INTEGER,
-    bates_range   TEXT,
-    ocr_text      TEXT,
-    tags          TEXT,
-    location_ids  TEXT,
-    verification_status TEXT
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id TEXT UNIQUE,
+    title TEXT,
+    date TEXT,
+    source TEXT,
+    category TEXT,
+    summary TEXT,
+    total_pages INTEGER,
+    total_chars INTEGER,
+    file_path TEXT,
+    tags TEXT
+);
+
+CREATE TABLE IF NOT EXISTS pages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER REFERENCES documents(id),
+    doc_id TEXT,
+    page_number INTEGER,
+    text_content TEXT,
+    char_count INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS persons (
-    id         TEXT PRIMARY KEY,
-    slug       TEXT NOT NULL UNIQUE,
-    name       TEXT NOT NULL,
-    aliases    TEXT,
-    category   TEXT NOT NULL,
-    short_bio  TEXT
+    id TEXT PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    aliases TEXT,
+    category TEXT NOT NULL,
+    short_bio TEXT
 );
 
 CREATE TABLE IF NOT EXISTS document_persons (
-    document_id  TEXT NOT NULL REFERENCES documents(id),
-    person_id    TEXT NOT NULL REFERENCES persons(id),
+    document_id TEXT NOT NULL,
+    person_id TEXT NOT NULL,
     PRIMARY KEY (document_id, person_id)
 );
 
 -- Forensic analysis tables
 CREATE TABLE IF NOT EXISTS redaction_scores (
-    document_id        TEXT PRIMARY KEY,
-    total_redactions   INTEGER DEFAULT 0,
-    proper_redactions  INTEGER DEFAULT 0,
+    document_id TEXT PRIMARY KEY,
+    total_redactions INTEGER DEFAULT 0,
+    proper_redactions INTEGER DEFAULT 0,
     improper_redactions INTEGER DEFAULT 0,
-    redaction_density  REAL DEFAULT 0,
-    page_count         INTEGER
+    redaction_density REAL DEFAULT 0,
+    page_count INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS recovered_text (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    document_id  TEXT NOT NULL,
-    page_number  INTEGER NOT NULL,
-    text         TEXT NOT NULL,
-    confidence   REAL DEFAULT 0
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id TEXT NOT NULL,
+    page_number INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    confidence REAL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS transcripts (
-    document_id      TEXT PRIMARY KEY,
-    source_path      TEXT,
-    text             TEXT NOT NULL,
-    language         TEXT DEFAULT 'en',
+    document_id TEXT PRIMARY KEY,
+    source_path TEXT,
+    text TEXT NOT NULL,
+    language TEXT DEFAULT 'en',
     duration_seconds REAL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS extracted_entities (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    document_id  TEXT NOT NULL,
-    entity_type  TEXT NOT NULL,
-    text         TEXT NOT NULL,
-    confidence   REAL DEFAULT 0,
-    person_id    TEXT
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    text TEXT NOT NULL,
+    confidence REAL DEFAULT 0,
+    person_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS extracted_images (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    document_id  TEXT NOT NULL,
-    page_number  INTEGER,
-    image_index  INTEGER,
-    width        INTEGER,
-    height       INTEGER,
-    format       TEXT,
-    file_path    TEXT,
-    description  TEXT,
-    size_bytes   INTEGER DEFAULT 0
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id TEXT NOT NULL,
+    page_number INTEGER,
+    image_index INTEGER,
+    width INTEGER,
+    height INTEGER,
+    format TEXT,
+    file_path TEXT,
+    description TEXT,
+    size_bytes INTEGER DEFAULT 0
 );
 
 -- Vector embedding chunks (BLOB for portable SQLite; F32_BLOB for Turso)
 CREATE TABLE IF NOT EXISTS document_chunks (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     document_id TEXT NOT NULL,
     chunk_index INTEGER NOT NULL,
-    chunk_text  TEXT NOT NULL,
-    embedding   BLOB,
+    chunk_text TEXT NOT NULL,
+    embedding BLOB,
     UNIQUE(document_id, chunk_index)
 );
 
--- Indices
-CREATE INDEX IF NOT EXISTS idx_documents_date       ON documents(date);
-CREATE INDEX IF NOT EXISTS idx_documents_source     ON documents(source);
-CREATE INDEX IF NOT EXISTS idx_documents_category   ON documents(category);
-CREATE INDEX IF NOT EXISTS idx_persons_slug         ON persons(slug);
-CREATE INDEX IF NOT EXISTS idx_persons_category     ON persons(category);
-CREATE INDEX IF NOT EXISTS idx_dp_document          ON document_persons(document_id);
-CREATE INDEX IF NOT EXISTS idx_dp_person            ON document_persons(person_id);
-CREATE INDEX IF NOT EXISTS idx_recovered_doc        ON recovered_text(document_id);
-CREATE INDEX IF NOT EXISTS idx_entities_doc         ON extracted_entities(document_id);
-CREATE INDEX IF NOT EXISTS idx_entities_type        ON extracted_entities(entity_type);
-CREATE INDEX IF NOT EXISTS idx_images_doc           ON extracted_images(document_id);
-CREATE INDEX IF NOT EXISTS idx_chunks_doc           ON document_chunks(document_id);
-
--- FTS5 full-text search
-CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
-    title,
-    summary,
-    ocr_text,
-    content='documents',
-    content_rowid='rowid'
+-- FTS5 on pages (THE critical feature)
+CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
+    text_content,
+    content='pages',
+    content_rowid='id'
 );
 
--- Triggers for FTS sync
-CREATE TRIGGER IF NOT EXISTS documents_ai AFTER INSERT ON documents BEGIN
-    INSERT INTO documents_fts(rowid, title, summary, ocr_text)
-    VALUES (new.rowid, new.title, new.summary, new.ocr_text);
+-- FTS5 sync triggers
+CREATE TRIGGER IF NOT EXISTS pages_ai AFTER INSERT ON pages BEGIN
+    INSERT INTO pages_fts(rowid, text_content) VALUES (new.id, new.text_content);
 END;
 
-CREATE TRIGGER IF NOT EXISTS documents_ad AFTER DELETE ON documents BEGIN
-    INSERT INTO documents_fts(documents_fts, rowid, title, summary, ocr_text)
-    VALUES ('delete', old.rowid, old.title, old.summary, old.ocr_text);
+CREATE TRIGGER IF NOT EXISTS pages_ad AFTER DELETE ON pages BEGIN
+    INSERT INTO pages_fts(pages_fts, rowid, text_content) VALUES ('delete', old.id, old.text_content);
 END;
 
-CREATE TRIGGER IF NOT EXISTS documents_au AFTER UPDATE ON documents BEGIN
-    INSERT INTO documents_fts(documents_fts, rowid, title, summary, ocr_text)
-    VALUES ('delete', old.rowid, old.title, old.summary, old.ocr_text);
-    INSERT INTO documents_fts(rowid, title, summary, ocr_text)
-    VALUES (new.rowid, new.title, new.summary, new.ocr_text);
+CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
+    INSERT INTO pages_fts(pages_fts, rowid, text_content) VALUES ('delete', old.id, old.text_content);
+    INSERT INTO pages_fts(rowid, text_content) VALUES (new.id, new.text_content);
 END;
+
+-- Indices
+CREATE INDEX IF NOT EXISTS idx_pages_doc ON pages(doc_id);
+CREATE INDEX IF NOT EXISTS idx_pages_docid ON pages(document_id);
+CREATE INDEX IF NOT EXISTS idx_documents_source ON documents(source);
+CREATE INDEX IF NOT EXISTS idx_documents_category ON documents(category);
+CREATE INDEX IF NOT EXISTS idx_persons_slug ON persons(slug);
+CREATE INDEX IF NOT EXISTS idx_persons_category ON persons(category);
+CREATE INDEX IF NOT EXISTS idx_dp_document ON document_persons(document_id);
+CREATE INDEX IF NOT EXISTS idx_dp_person ON document_persons(person_id);
+CREATE INDEX IF NOT EXISTS idx_recovered_doc ON recovered_text(document_id);
+CREATE INDEX IF NOT EXISTS idx_entities_doc ON extracted_entities(document_id);
+CREATE INDEX IF NOT EXISTS idx_entities_type ON extracted_entities(entity_type);
+CREATE INDEX IF NOT EXISTS idx_images_doc ON extracted_images(document_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_doc ON document_chunks(document_id);
 """
 
 DEFAULT_DB_NAME = "corpus.db"
 
 
 class SqliteExporter:
-    """Export documents, persons, and forensic data to a SQLite database."""
+    """Export documents, pages, persons, and forensic data to a SQLite database."""
 
     def __init__(self) -> None:
         self._console = Console()
@@ -176,6 +176,7 @@ class SqliteExporter:
         persons: list[Person],
         db_path: Path,
         *,
+        pages: list[Page] | None = None,
         redaction_scores: list[RedactionScore] | None = None,
         recovered_texts: list[RecoveredText] | None = None,
         transcripts: list[Transcript] | None = None,
@@ -192,6 +193,8 @@ class SqliteExporter:
             List of Person models.
         db_path:
             Output database file path.
+        pages:
+            Optional list of Page models for per-page text storage.
         redaction_scores:
             Optional redaction analysis scores.
         recovered_texts:
@@ -219,7 +222,8 @@ class SqliteExporter:
             conn.executescript(_SCHEMA_SQL)
 
             self._insert_persons(conn, persons)
-            self._insert_documents(conn, documents)
+            doc_id_map = self._insert_documents(conn, documents, pages or [])
+            self._insert_pages(conn, pages or [], doc_id_map)
             self._insert_document_persons(conn, documents)
 
             if redaction_scores:
@@ -233,17 +237,19 @@ class SqliteExporter:
             if images:
                 self._insert_images(conn, images)
 
-            # Optimize
-            conn.execute("INSERT INTO documents_fts(documents_fts) VALUES ('optimize')")
+            # Optimize FTS5 index
+            conn.execute("INSERT INTO pages_fts(pages_fts) VALUES ('optimize')")
             conn.execute("ANALYZE")
             conn.commit()
 
         finally:
             conn.close()
 
+        page_count = len(pages) if pages else 0
         size_mb = db_path.stat().st_size / (1024 * 1024)
         self._console.print(f"\n[green]Created SQLite database at {db_path.resolve()}[/green]")
         self._console.print(f"  Documents:        {len(documents):,}")
+        self._console.print(f"  Pages:            {page_count:,}")
         self._console.print(f"  Persons:          {len(persons):,}")
         if redaction_scores:
             self._console.print(f"  Redaction scores: {len(redaction_scores):,}")
@@ -256,7 +262,7 @@ class SqliteExporter:
         if images:
             self._console.print(f"  Images:           {len(images):,}")
         self._console.print(f"  Size:             {size_mb:.1f} MB")
-        self._console.print("  FTS5 index:       title, summary, ocr_text")
+        self._console.print("  FTS5 index:       pages.text_content")
 
         return db_path
 
@@ -285,42 +291,87 @@ class SqliteExporter:
         conn.commit()
         self._console.print(f"  [dim]Inserted {len(rows):,} persons[/dim]")
 
-    def _insert_documents(self, conn: sqlite3.Connection, documents: list[Document]) -> None:
+    def _insert_documents(
+        self,
+        conn: sqlite3.Connection,
+        documents: list[Document],
+        pages: list[Page],
+    ) -> dict[str, int]:
+        """Insert documents and return a mapping of doc_id -> autoincrement id."""
+        # Pre-compute page stats per document
+        page_counts: dict[str, int] = {}
+        char_counts: dict[str, int] = {}
+        for p in pages:
+            page_counts[p.document_id] = page_counts.get(p.document_id, 0) + 1
+            char_counts[p.document_id] = char_counts.get(p.document_id, 0) + p.char_count
+
+        doc_id_map: dict[str, int] = {}
+        for doc in documents:
+            total_pages = page_counts.get(doc.id, doc.pageCount or 0)
+            total_chars = char_counts.get(doc.id, len(doc.ocrText) if doc.ocrText else 0)
+            conn.execute(
+                """INSERT OR REPLACE INTO documents
+                   (doc_id, title, date, source, category, summary,
+                    total_pages, total_chars, file_path, tags)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    doc.id,
+                    doc.title,
+                    doc.date,
+                    doc.source,
+                    doc.category,
+                    doc.summary,
+                    total_pages,
+                    total_chars,
+                    doc.pdfUrl,
+                    "; ".join(doc.tags) if doc.tags else None,
+                ),
+            )
+            # Get the autoincrement id
+            row = conn.execute(
+                "SELECT id FROM documents WHERE doc_id = ?", (doc.id,)
+            ).fetchone()
+            if row:
+                doc_id_map[doc.id] = row[0]
+
+        conn.commit()
+        self._console.print(f"  [dim]Inserted {len(documents):,} documents[/dim]")
+        return doc_id_map
+
+    def _insert_pages(
+        self,
+        conn: sqlite3.Connection,
+        pages: list[Page],
+        doc_id_map: dict[str, int],
+    ) -> None:
+        """Insert pages with both document_id (int FK) and doc_id (text for joins)."""
         rows = [
             (
-                doc.id,
-                doc.title,
-                doc.date,
-                doc.source,
-                doc.category,
-                doc.summary,
-                doc.pdfUrl,
-                doc.sourceUrl,
-                doc.archiveUrl,
-                doc.pageCount,
-                doc.batesRange,
-                doc.ocrText,
-                "; ".join(doc.tags) if doc.tags else None,
-                "; ".join(doc.locationIds) if doc.locationIds else None,
-                doc.verificationStatus,
+                doc_id_map.get(p.document_id),
+                p.document_id,
+                p.page_number,
+                p.text_content,
+                p.char_count,
             )
-            for doc in documents
+            for p in pages
         ]
         conn.executemany(
-            """INSERT OR REPLACE INTO documents
-               (id, title, date, source, category, summary, pdf_url, source_url, archive_url,
-                page_count, bates_range, ocr_text, tags, location_ids, verification_status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO pages
+               (document_id, doc_id, page_number, text_content, char_count)
+               VALUES (?, ?, ?, ?, ?)""",
             rows,
         )
         conn.commit()
-        self._console.print(f"  [dim]Inserted {len(rows):,} documents[/dim]")
+        self._console.print(f"  [dim]Inserted {len(rows):,} pages[/dim]")
 
-    def _insert_document_persons(self, conn: sqlite3.Connection, documents: list[Document]) -> None:
+    def _insert_document_persons(
+        self, conn: sqlite3.Connection, documents: list[Document]
+    ) -> None:
         rows = [(doc.id, pid) for doc in documents for pid in doc.personIds]
         if rows:
             conn.executemany(
-                "INSERT OR IGNORE INTO document_persons (document_id, person_id) VALUES (?, ?)",
+                "INSERT OR IGNORE INTO document_persons (document_id, person_id)"
+                " VALUES (?, ?)",
                 rows,
             )
             conn.commit()
@@ -354,7 +405,9 @@ class SqliteExporter:
         conn.commit()
         self._console.print(f"  [dim]Inserted {len(rows):,} redaction scores[/dim]")
 
-    def _insert_recovered_text(self, conn: sqlite3.Connection, texts: list[RecoveredText]) -> None:
+    def _insert_recovered_text(
+        self, conn: sqlite3.Connection, texts: list[RecoveredText]
+    ) -> None:
         rows = [(t.document_id, t.page_number, t.text, t.confidence) for t in texts]
         conn.executemany(
             "INSERT INTO recovered_text"
@@ -365,7 +418,9 @@ class SqliteExporter:
         conn.commit()
         self._console.print(f"  [dim]Inserted {len(rows):,} recovered text entries[/dim]")
 
-    def _insert_transcripts(self, conn: sqlite3.Connection, transcripts: list[Transcript]) -> None:
+    def _insert_transcripts(
+        self, conn: sqlite3.Connection, transcripts: list[Transcript]
+    ) -> None:
         rows = [
             (t.document_id, t.source_path, t.text, t.language, t.duration_seconds)
             for t in transcripts
@@ -379,8 +434,13 @@ class SqliteExporter:
         conn.commit()
         self._console.print(f"  [dim]Inserted {len(rows):,} transcripts[/dim]")
 
-    def _insert_entities(self, conn: sqlite3.Connection, entities: list[ExtractedEntity]) -> None:
-        rows = [(e.document_id, e.entity_type, e.text, e.confidence, e.person_id) for e in entities]
+    def _insert_entities(
+        self, conn: sqlite3.Connection, entities: list[ExtractedEntity]
+    ) -> None:
+        rows = [
+            (e.document_id, e.entity_type, e.text, e.confidence, e.person_id)
+            for e in entities
+        ]
         conn.executemany(
             "INSERT INTO extracted_entities"
             " (document_id, entity_type, text, confidence, person_id)"
@@ -390,7 +450,9 @@ class SqliteExporter:
         conn.commit()
         self._console.print(f"  [dim]Inserted {len(rows):,} entities[/dim]")
 
-    def _insert_images(self, conn: sqlite3.Connection, images: list[ExtractedImage]) -> None:
+    def _insert_images(
+        self, conn: sqlite3.Connection, images: list[ExtractedImage]
+    ) -> None:
         rows = [
             (
                 i.document_id,

@@ -155,9 +155,10 @@ def run_ingest(
     json_files = sorted(source_dir.glob("*.json"))
 
     from casestack.exporters.sqlite_export import SqliteExporter
-    from casestack.models.document import Document, ProcessingResult
+    from casestack.models.document import Document, Page, ProcessingResult
 
     documents = []
+    all_pages: list[Page] = []
     for jf in json_files:
         try:
             raw = json.loads(jf.read_text(encoding="utf-8"))
@@ -165,6 +166,7 @@ def run_ingest(
                 result = ProcessingResult.model_validate(raw)
                 if result.document:
                     documents.append(result.document)
+                    all_pages.extend(result.pages)
             elif "id" in raw and "title" in raw:
                 documents.append(Document.model_validate(raw))
         except Exception:
@@ -173,8 +175,8 @@ def run_ingest(
     db_path = case.db_path
     db_path.parent.mkdir(parents=True, exist_ok=True)
     exporter = SqliteExporter()
-    exporter.export(documents=documents, persons=[], db_path=db_path)
-    console.print(f"  [green]Exported {len(documents)} documents -> {db_path}[/green]")
+    exporter.export(documents=documents, persons=[], db_path=db_path, pages=all_pages)
+    console.print(f"  [green]Exported {len(documents)} documents, {len(all_pages)} pages -> {db_path}[/green]")
 
     # --- Generate Datasette config ---
     _generate_datasette_config(case, db_path)
@@ -188,7 +190,7 @@ def run_ingest(
 
 def _ingest_text_files(docs_dir: Path, ocr_dir: Path) -> None:
     """Fallback: ingest plain text files as pseudo-OCR output."""
-    from casestack.models.document import Document, ProcessingResult
+    from casestack.models.document import Document, Page, ProcessingResult
     from casestack.utils.hashing import content_hash
 
     text_files = sorted(
@@ -210,9 +212,16 @@ def _ingest_text_files(docs_dir: Path, ocr_dir: Path) -> None:
             ocrText=text,
             tags=["text-ingest"],
         )
+        page = Page(
+            document_id=doc_id,
+            page_number=1,
+            text_content=text,
+            char_count=len(text),
+        )
         result = ProcessingResult(
             source_path=str(tf),
             document=doc,
+            pages=[page],
             processing_time_ms=0,
             errors=[],
         )

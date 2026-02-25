@@ -18,7 +18,7 @@ from rich.progress import (
 )
 
 from casestack.config import Settings
-from casestack.models.document import Document, ProcessingResult
+from casestack.models.document import Document, Page, ProcessingResult
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,7 @@ def _process_single_ocr(args: tuple[str, str, str]) -> ProcessingResult:
 
     content_hash = hashlib.sha256(path.read_bytes()).hexdigest()
     doc_id = f"ocr-{content_hash[:12]}"
+    page_objects: list[Page] = []
 
     # Try PyMuPDF first if requested
     if backend in ("pymupdf", "both"):
@@ -52,8 +53,16 @@ def _process_single_ocr(args: tuple[str, str, str]) -> ProcessingResult:
 
             doc = fitz.open(str(path))
             pages_text = []
-            for page in doc:
-                pages_text.append(page.get_text())
+            for i, page in enumerate(doc):
+                text = page.get_text()
+                if text.strip():
+                    pages_text.append(text)
+                    page_objects.append(Page(
+                        document_id=doc_id,
+                        page_number=i + 1,
+                        text_content=text,
+                        char_count=len(text),
+                    ))
             doc.close()
             md_text = "\n\n".join(pages_text).strip()
 
@@ -63,6 +72,7 @@ def _process_single_ocr(args: tuple[str, str, str]) -> ProcessingResult:
             else:
                 warnings.append("PyMuPDF produced empty text")
                 md_text = ""
+                page_objects = []
         except ImportError:
             if backend == "pymupdf":
                 errors.append("PyMuPDF not installed. Install with: pip install pymupdf")
@@ -82,6 +92,15 @@ def _process_single_ocr(args: tuple[str, str, str]) -> ProcessingResult:
             if not md_text or not md_text.strip():
                 warnings.append(f"Docling produced empty text for {path.name}")
                 md_text = ""
+            else:
+                # Docling doesn't provide per-page text easily;
+                # create a single Page containing all text.
+                page_objects = [Page(
+                    document_id=doc_id,
+                    page_number=1,
+                    text_content=md_text,
+                    char_count=len(md_text),
+                )]
         except ImportError:
             errors.append("Docling not installed. Install with: pip install docling")
         except Exception as exc:
@@ -104,6 +123,7 @@ def _process_single_ocr(args: tuple[str, str, str]) -> ProcessingResult:
     return ProcessingResult(
         source_path=str(path),
         document=document,
+        pages=page_objects,
         errors=errors,
         warnings=warnings,
         processing_time_ms=elapsed,

@@ -138,6 +138,11 @@ def status(case_path):
         try:
             count = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
             console.print(f"  Documents:     {count:,}")
+            try:
+                page_count = conn.execute("SELECT COUNT(*) FROM pages").fetchone()[0]
+                console.print(f"  Pages:         {page_count:,}")
+            except Exception:
+                pass
         except Exception:
             pass
         finally:

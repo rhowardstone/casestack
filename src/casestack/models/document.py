@@ -54,6 +54,15 @@ VerificationStatus = Literal[
 # ---------------------------------------------------------------------------
 
 
+class Page(BaseModel):
+    """A single page of a document."""
+
+    document_id: str
+    page_number: int
+    text_content: str
+    char_count: int
+
+
 class Document(BaseModel):
     """A single document in the case file corpus."""
 
@@ -128,6 +137,7 @@ class ProcessingResult(BaseModel):
 
     source_path: str
     document: Document | None = None
+    pages: list[Page] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     processing_time_ms: int
