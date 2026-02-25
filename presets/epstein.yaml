@@ -1,0 +1,23 @@
+name: "Epstein Files Transparency Act"
+slug: "epstein"
+description: "1.38M documents (2.77M pages) released under the Epstein Files Transparency Act"
+documents_dir: "./data/efta"
+
+ocr:
+  backend: "both"
+  workers: 8
+
+entities:
+  types: ["PERSON", "ORG", "GPE", "DATE", "MONEY"]
+  registry: "./data/persons-registry.json"
+
+dedup:
+  threshold: 0.90
+  bates_prefixes: ["EFTA"]
+
+serve:
+  port: 8001
+  title: "Epstein Files — Document Search"
+
+ask_proxy_enabled: true
+openrouter_api_key_env: "OPENROUTER_API_KEY"

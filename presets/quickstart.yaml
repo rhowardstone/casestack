@@ -1,0 +1,12 @@
+name: "My Document Collection"
+slug: "my-docs"
+description: "A searchable database of my documents"
+documents_dir: "./documents"
+
+ocr:
+  backend: "pymupdf"
+  workers: 4
+
+serve:
+  port: 8001
+  title: "Document Search"
