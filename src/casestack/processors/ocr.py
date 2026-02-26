@@ -210,21 +210,27 @@ class OcrProcessor:
         results: list[ProcessingResult] = []
         workers = max_workers or self.config.max_workers
 
-        # Pre-compute hashes to skip already-processed files
+        # Check which files are already processed (resumable).
+        # Use filename-based keys for the initial scan to avoid reading
+        # every file's contents upfront (which is prohibitive at scale).
+        # Content hashing happens inside each worker.
+        existing = set(f.stem for f in output_dir.glob("*.json"))
         to_process: list[tuple[Path, str]] = []
         for p in paths:
-            content_hash = hashlib.sha256(p.read_bytes()).hexdigest()
-            out_path = output_dir / f"{content_hash}.json"
-            if out_path.exists():
+            # Quick check: if any output file starts with this filename stem,
+            # assume it's done.  Content-hash keying happens at write time.
+            name_key = p.stem
+            if name_key in existing:
+                out_path = output_dir / f"{name_key}.json"
                 try:
                     prev = ProcessingResult.model_validate_json(
                         out_path.read_text(encoding="utf-8")
                     )
                     results.append(prev)
                 except Exception:
-                    to_process.append((p, content_hash))
+                    to_process.append((p, name_key))
             else:
-                to_process.append((p, content_hash))
+                to_process.append((p, name_key))
 
         if not to_process:
             return results
@@ -247,7 +253,7 @@ class OcrProcessor:
 
         results: list[ProcessingResult] = []
         args_list = [(str(p), self.backend, self.config.spacy_model) for p, _ in to_process]
-        hash_map = {str(p): h for p, h in to_process}
+        key_map = {str(p): k for p, k in to_process}
 
         progress = Progress(
             SpinnerColumn(),
@@ -271,9 +277,9 @@ class OcrProcessor:
                     try:
                         result = future.result()
                         results.append(result)
-                        # Persist
-                        content_hash = hash_map[args[0]]
-                        out_path = output_dir / f"{content_hash}.json"
+                        # Persist using filename key
+                        file_key = key_map[args[0]]
+                        out_path = output_dir / f"{file_key}.json"
                         out_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
                     except Exception as exc:
                         logger.error("OCR failed for %s: %s", args[0], exc)
@@ -300,12 +306,12 @@ class OcrProcessor:
 
         with progress:
             task = progress.add_task("OCR processing", total=len(to_process))
-            for file_path, content_hash in to_process:
+            for file_path, file_key in to_process:
                 progress.update(task, description=f"OCR: {file_path.name[:40]}")
                 result = self.process_file(file_path)
                 results.append(result)
 
-                out_path = output_dir / f"{content_hash}.json"
+                out_path = output_dir / f"{file_key}.json"
                 out_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
                 progress.advance(task)
 

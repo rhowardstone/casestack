@@ -18,6 +18,8 @@ _ALIASES: dict[tuple[str, str], str] = {
     ("dedup", "bates_prefixes"): "bates_prefixes",
     ("serve", "port"): "serve_port",
     ("serve", "title"): "serve_title",
+    ("transcription", "model"): "whisper_model",
+    ("transcription", "device"): "whisper_device",
 }
 
 # Aliases for 3-level nested keys: section_subsection_key -> model field
@@ -50,6 +52,10 @@ class CaseConfig(BaseModel):
     # Dedup
     dedup_threshold: float = 0.90
     bates_prefixes: list[str] = Field(default_factory=list)
+
+    # Transcription
+    whisper_model: str = "auto"
+    whisper_device: str = "auto"
 
     # Embeddings
     embedding_model: str = "nomic-ai/nomic-embed-text-v2-moe"
@@ -92,7 +98,7 @@ class CaseConfig(BaseModel):
             raise ValueError(f"Invalid case config: {path} (expected YAML mapping, got {type(raw).__name__})")
         flat: dict = {}
         for key, value in raw.items():
-            if isinstance(value, dict) and key in ("ocr", "serve", "entities", "dedup"):
+            if isinstance(value, dict) and key in ("ocr", "serve", "entities", "dedup", "transcription"):
                 for sub_key, sub_value in value.items():
                     # Handle nested dicts (e.g., serve.ask_proxy.enabled)
                     if isinstance(sub_value, dict):

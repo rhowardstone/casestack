@@ -29,6 +29,8 @@ def run_ingest(
     ocr_dir.mkdir(parents=True, exist_ok=True)
     entities_dir.mkdir(parents=True, exist_ok=True)
 
+    transcripts_collected: list = []  # Transcript objects for SQLite export
+
     console.print(f"\n[bold cyan]CaseStack[/bold cyan] — Ingesting: {case.name}")
     console.print(f"  Documents: {case.documents_dir}")
     console.print(f"  Output:    {settings.output_dir}")
@@ -36,23 +38,89 @@ def run_ingest(
     # --- Step 1: OCR ---
     if not skip_ocr:
         pdfs = sorted(case.documents_dir.rglob("*.pdf"))
-        console.print(f"\n[bold]Step 1/4: OCR[/bold] — {len(pdfs)} PDFs")
+        total_pdfs = len(pdfs)
+        console.print(f"\n[bold]Step 1/5: OCR[/bold] — {total_pdfs:,} PDFs")
         if pdfs:
             from casestack.processors.ocr import OcrProcessor
 
             processor = OcrProcessor(settings, backend=case.ocr_backend)
-            results = processor.process_batch(pdfs, ocr_dir, max_workers=case.ocr_workers)
-            ok = sum(1 for r in results if r.document is not None)
-            console.print(f"  [green]{ok} succeeded[/green]")
+
+            # Process in batches to avoid OOM on large corpora
+            batch_size = 5000
+            ok = 0
+            for batch_start in range(0, total_pdfs, batch_size):
+                batch = pdfs[batch_start : batch_start + batch_size]
+                batch_num = batch_start // batch_size + 1
+                total_batches = (total_pdfs + batch_size - 1) // batch_size
+                if total_batches > 1:
+                    console.print(
+                        f"  [dim]Batch {batch_num}/{total_batches}"
+                        f" ({batch_start:,}-{batch_start + len(batch):,})[/dim]"
+                    )
+                results = processor.process_batch(
+                    batch, ocr_dir, max_workers=case.ocr_workers
+                )
+                ok += sum(1 for r in results if r.document is not None)
+                del results  # Free memory between batches
+            console.print(f"  [green]{ok:,} succeeded[/green]")
         else:
             console.print("  [yellow]No PDFs found, scanning for text files...[/yellow]")
             _ingest_text_files(case.documents_dir, ocr_dir)
     else:
-        console.print("\n[dim]Step 1/4: OCR — skipped[/dim]")
+        console.print("\n[dim]Step 1/5: OCR — skipped[/dim]")
+
+    # --- Step 1b: Transcription (audio/video) ---
+    from casestack.processors.transcription import MEDIA_EXTENSIONS
+
+    media_files = sorted(
+        f
+        for f in case.documents_dir.rglob("*")
+        if f.suffix.lower() in MEDIA_EXTENSIONS and f.is_file()
+    )
+    if media_files:
+        console.print(f"\n[bold]Step 1b/5: Transcription[/bold] — {len(media_files):,} media files")
+        try:
+            import faster_whisper as _fw  # noqa: F401
+
+            from casestack.processors.transcription import TranscriptionProcessor
+
+            tp = TranscriptionProcessor(settings)
+            t_results = tp.process_batch(media_files, settings.output_dir)
+
+            ok = 0
+            for tr in t_results:
+                if tr.document is not None:
+                    # Save as OCR-compatible JSON so entity extraction picks it up
+                    from casestack.models.document import ProcessingResult
+
+                    compat = ProcessingResult(
+                        source_path=tr.source_path,
+                        document=tr.document,
+                        pages=tr.pages,
+                        errors=tr.errors,
+                        warnings=tr.warnings,
+                        processing_time_ms=tr.processing_time_ms,
+                    )
+                    out_path = ocr_dir / f"{Path(tr.source_path).stem}.json"
+                    out_path.write_text(
+                        compat.model_dump_json(indent=2), encoding="utf-8"
+                    )
+                    ok += 1
+                if tr.transcript is not None:
+                    transcripts_collected.append(tr.transcript)
+
+            console.print(f"  [green]{ok:,} transcribed[/green]")
+        except ImportError:
+            console.print(
+                "  [yellow]faster-whisper not installed — skipping."
+                " Install with: pip install 'casestack[transcription]'[/yellow]"
+            )
+    else:
+        console.print("\n[dim]Step 1b/5: Transcription — no media files found[/dim]")
 
     # --- Step 2: Entity extraction ---
     if not skip_entities:
-        console.print("\n[bold]Step 2/4: Entity extraction[/bold]")
+        console.print("\n[bold]Step 2/5: Entity extraction[/bold]")
         json_files = sorted(ocr_dir.glob("*.json"))
         if json_files:
             from casestack.models.document import ProcessingResult
@@ -113,11 +181,11 @@ def run_ingest(
         else:
             console.print("  [yellow]No OCR output to extract from[/yellow]")
     else:
-        console.print("\n[dim]Step 2/4: Entities — skipped[/dim]")
+        console.print("\n[dim]Step 2/5: Entities — skipped[/dim]")
 
     # --- Step 3: Dedup ---
     if not skip_dedup:
-        console.print("\n[bold]Step 3/4: Deduplication[/bold]")
+        console.print("\n[bold]Step 3/5: Deduplication[/bold]")
         source_dir = entities_dir if list(entities_dir.glob("*.json")) else ocr_dir
         json_files = sorted(source_dir.glob("*.json"))
         if json_files:
@@ -147,10 +215,10 @@ def run_ingest(
                 encoding="utf-8",
             )
     else:
-        console.print("\n[dim]Step 3/4: Dedup — skipped[/dim]")
+        console.print("\n[dim]Step 3/5: Dedup — skipped[/dim]")
 
     # --- Step 4: SQLite export ---
-    console.print("\n[bold]Step 4/4: SQLite export[/bold]")
+    console.print("\n[bold]Step 4/5: SQLite export[/bold]")
     source_dir = entities_dir if list(entities_dir.glob("*.json")) else ocr_dir
     json_files = sorted(source_dir.glob("*.json"))
 
@@ -175,7 +243,13 @@ def run_ingest(
     db_path = case.db_path
     db_path.parent.mkdir(parents=True, exist_ok=True)
     exporter = SqliteExporter()
-    exporter.export(documents=documents, persons=[], db_path=db_path, pages=all_pages)
+    exporter.export(
+        documents=documents,
+        persons=[],
+        db_path=db_path,
+        pages=all_pages,
+        transcripts=transcripts_collected or None,
+    )
     console.print(f"  [green]Exported {len(documents)} documents, {len(all_pages)} pages -> {db_path}[/green]")
 
     # --- Generate Datasette config ---

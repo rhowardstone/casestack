@@ -10,6 +10,7 @@ from casestack.models.document import (
     Page,
     Person,
     ProcessingResult,
+    TranscriptionResult,
     VerificationStatus,
 )
 from casestack.models.forensics import (
@@ -40,6 +41,7 @@ __all__ = [
     "Person",
     "PersonRegistry",
     "ProcessingResult",
+    "TranscriptionResult",
     "ProvenanceRange",
     "Redaction",
     "RedactionAnalysisResult",

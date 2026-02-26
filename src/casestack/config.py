@@ -34,7 +34,8 @@ class Settings(BaseSettings):
     summarizer_model: str = "llama3.2"
 
     # Transcription
-    whisper_model: str = "large-v3"
+    whisper_model: str = "auto"
+    whisper_device: str = "auto"
 
     # Embedding settings
     embedding_model: str = "nomic-ai/nomic-embed-text-v2-moe"
@@ -67,6 +68,8 @@ class Settings(BaseSettings):
             ocr_backend=case.ocr_backend,
             embedding_model=case.embedding_model,
             embedding_dimensions=case.embedding_dimensions,
+            whisper_model=case.whisper_model,
+            whisper_device=case.whisper_device,
         )
 
     def ensure_dirs(self) -> None:

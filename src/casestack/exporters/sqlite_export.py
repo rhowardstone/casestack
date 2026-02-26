@@ -149,6 +149,26 @@ CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
     INSERT INTO pages_fts(rowid, text_content) VALUES (new.id, new.text_content);
 END;
 
+-- FTS5 on transcripts
+CREATE VIRTUAL TABLE IF NOT EXISTS transcripts_fts USING fts5(
+    text,
+    content='transcripts',
+    content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS transcripts_ai AFTER INSERT ON transcripts BEGIN
+    INSERT INTO transcripts_fts(rowid, text) VALUES (new.rowid, new.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS transcripts_ad AFTER DELETE ON transcripts BEGIN
+    INSERT INTO transcripts_fts(transcripts_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS transcripts_au AFTER UPDATE ON transcripts BEGIN
+    INSERT INTO transcripts_fts(transcripts_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+    INSERT INTO transcripts_fts(rowid, text) VALUES (new.rowid, new.text);
+END;
+
 -- Indices
 CREATE INDEX IF NOT EXISTS idx_pages_doc_page ON pages(doc_id, page_number);
 CREATE INDEX IF NOT EXISTS idx_pages_docid ON pages(document_id);
@@ -242,8 +262,9 @@ class SqliteExporter:
             if images:
                 self._insert_images(conn, images)
 
-            # Optimize FTS5 index
+            # Optimize FTS5 indices
             conn.execute("INSERT INTO pages_fts(pages_fts) VALUES ('optimize')")
+            conn.execute("INSERT INTO transcripts_fts(transcripts_fts) VALUES ('optimize')")
             conn.execute("ANALYZE")
             conn.commit()
 
@@ -267,7 +288,7 @@ class SqliteExporter:
         if images:
             self._console.print(f"  Images:           {len(images):,}")
         self._console.print(f"  Size:             {size_mb:.1f} MB")
-        self._console.print("  FTS5 index:       pages.text_content")
+        self._console.print("  FTS5 index:       pages.text_content, transcripts.text")
 
         return db_path
 

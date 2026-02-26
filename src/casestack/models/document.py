@@ -141,3 +141,21 @@ class ProcessingResult(BaseModel):
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     processing_time_ms: int
+
+
+class TranscriptionResult(BaseModel):
+    """Result of transcribing a single audio/video file."""
+
+    source_path: str
+    transcript: Transcript | None = None
+    document: Document | None = None
+    pages: list[Page] = Field(default_factory=list)
+    processing_time_ms: int = 0
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+# Resolve forward reference to Transcript from forensics module
+from casestack.models.forensics import Transcript  # noqa: E402
+
+TranscriptionResult.model_rebuild()
