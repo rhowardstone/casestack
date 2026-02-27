@@ -22,11 +22,63 @@ from casestack.config import Settings
 from casestack.models.document import Document, Page, TranscriptionResult
 from casestack.models.forensics import Transcript, TranscriptSegment
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 AUDIO_EXTENSIONS = {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".aac", ".wma"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".wmv", ".m4v", ".vob", ".ts"}
 MEDIA_EXTENSIONS = AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
+
+
+def _check_audio_content(
+    path: str,
+    sample_seconds: float = 10.0,
+    silence_threshold_db: float = -40.0,
+) -> tuple[bool, float, float]:
+    """Quick audio content check using PyAV.
+
+    Decodes the first *sample_seconds* of audio and measures RMS volume.
+
+    Returns ``(has_speech, duration_seconds, rms_db)``.
+    """
+    import av
+
+    try:
+        with av.open(path, mode="r", metadata_errors="ignore") as container:
+            audio_stream = next(
+                (s for s in container.streams if s.type == "audio"), None
+            )
+            if audio_stream is None:
+                return False, 0.0, -100.0
+
+            duration = float(container.duration or 0) / av.time_base
+
+            resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
+            samples: list[np.ndarray] = []
+            target = int(16000 * sample_seconds)
+
+            for frame in container.decode(audio=0):
+                for resampled in resampler.resample(frame):
+                    arr = resampled.to_ndarray().flatten()
+                    samples.append(arr)
+                    if sum(len(s) for s in samples) >= target:
+                        break
+                if sum(len(s) for s in samples) >= target:
+                    break
+
+            if not samples:
+                return False, duration, -100.0
+
+            audio = np.concatenate(samples).astype(np.float32) / 32768.0
+            rms = np.sqrt(np.mean(audio**2))
+            rms_db = 20 * np.log10(rms + 1e-10)
+
+            return bool(rms_db > silence_threshold_db), duration, float(rms_db)
+    except Exception as exc:
+        logger.warning("Audio content check failed for %s: %s", path, exc)
+        # If we can't check, assume it has content and let Whisper handle it
+        return True, 0.0, 0.0
 
 
 def _detect_hardware() -> tuple[str, str, str]:
@@ -59,8 +111,33 @@ def _process_single_transcription(
     errors: list[str] = []
     warnings: list[str] = []
 
+    # Quick silence check — skip Whisper entirely for silent files
+    has_speech, duration, rms_db = _check_audio_content(str(path))
+
     content_hash = hashlib.sha256(path.read_bytes()).hexdigest()
     doc_id = f"transcript-{content_hash[:12]}"
+
+    if not has_speech:
+        warnings.append(
+            f"Skipped {path.name}: silent (RMS={rms_db:.1f}dB, duration={duration:.0f}s)"
+        )
+        elapsed = (time.monotonic_ns() // 1_000_000) - start_ms
+        return TranscriptionResult(
+            source_path=str(path),
+            transcript=None,
+            document=Document(
+                id=doc_id,
+                title=path.stem.replace("_", " ").replace("-", " ").strip(),
+                source="local",
+                category="media",
+                ocrText="",
+                tags=["transcript", "silent"],
+            ),
+            pages=[],
+            processing_time_ms=elapsed,
+            errors=errors,
+            warnings=warnings,
+        )
 
     transcript_obj: Transcript | None = None
     document: Document | None = None
@@ -230,7 +307,13 @@ class TranscriptionProcessor:
         with progress:
             task = progress.add_task("Transcribing", total=len(to_process))
             for file_path, file_key in to_process:
-                progress.update(task, description=f"Transcribe: {file_path.name[:40]}")
+                # Quick pre-check for duration display
+                _, est_dur, _ = _check_audio_content(str(file_path), sample_seconds=0.1)
+                dur_label = f" ({est_dur:.0f}s)" if est_dur > 0 else ""
+                progress.update(
+                    task,
+                    description=f"Transcribe: {file_path.name[:30]}{dur_label}",
+                )
                 result = self.process_file(file_path)
                 results.append(result)
 

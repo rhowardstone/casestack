@@ -13,6 +13,7 @@ import pytest
 from casestack.models.document import TranscriptionResult
 from casestack.processors.transcription import (
     MEDIA_EXTENSIONS,
+    _check_audio_content,
     _detect_hardware,
 )
 
@@ -115,6 +116,114 @@ class TestMediaDiscovery:
 
 
 # ---------------------------------------------------------------------------
+# Tests: silence detection
+# ---------------------------------------------------------------------------
+
+
+class TestCheckAudioContent:
+    def test_silent_wav_detected(self, silent_wav: Path):
+        """A fully silent WAV should be detected as having no speech."""
+        has_speech, duration, rms_db = _check_audio_content(str(silent_wav))
+        assert has_speech is False
+        assert rms_db < -40.0
+        assert duration > 0.0
+
+    def test_loud_wav_detected(self, tmp_path: Path):
+        """A WAV with a loud tone should be detected as having content."""
+        wav_path = tmp_path / "loud.wav"
+        framerate = 16000
+        n_frames = framerate  # 1 second
+        # Generate a 440Hz sine wave at full amplitude
+        import math
+
+        samples = [int(32000 * math.sin(2 * math.pi * 440 * i / framerate)) for i in range(n_frames)]
+        with wave.open(str(wav_path), "w") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(framerate)
+            wf.writeframes(struct.pack(f"<{n_frames}h", *samples))
+
+        has_speech, duration, rms_db = _check_audio_content(str(wav_path))
+        assert has_speech is True
+        assert rms_db > -40.0
+
+    def test_no_audio_stream(self, tmp_path: Path):
+        """A file with no audio stream returns False."""
+        # Create an empty file that can't have an audio stream
+        fake = tmp_path / "noaudio.txt"
+        fake.write_bytes(b"\x00" * 100)
+        has_speech, duration, rms_db = _check_audio_content(str(fake))
+        # Should gracefully return True (fallback) since av.open will fail
+        assert has_speech is True  # fallback: assume content on error
+
+    def test_nonexistent_file(self, tmp_path: Path):
+        """A missing file returns True (fallback) so Whisper can report the real error."""
+        has_speech, duration, rms_db = _check_audio_content(str(tmp_path / "nope.wav"))
+        assert has_speech is True  # fallback on error
+
+
+class TestSilenceSkipping:
+    def test_silent_file_skipped_with_warning(self, silent_wav: Path):
+        """Silent files should be skipped with a warning, not sent to Whisper."""
+        from casestack.processors.transcription import _process_single_transcription
+
+        # No need to mock faster_whisper — silence check should skip before it's used
+        result = _process_single_transcription(
+            (str(silent_wav), "tiny", "cpu", "int8")
+        )
+        assert any("silent" in w.lower() or "Skipped" in w for w in result.warnings)
+        assert result.document is not None
+        assert "silent" in result.document.tags
+        assert result.transcript is None
+        assert result.errors == []
+
+    def test_loud_file_proceeds_to_transcription(self, tmp_path: Path):
+        """A file with audio content should proceed to Whisper (mocked)."""
+        from casestack.processors.transcription import _process_single_transcription
+
+        # Create a loud WAV
+        import math
+
+        wav_path = tmp_path / "loud.wav"
+        framerate = 16000
+        n_frames = framerate
+        samples = [int(32000 * math.sin(2 * math.pi * 440 * i / framerate)) for i in range(n_frames)]
+        with wave.open(str(wav_path), "w") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(framerate)
+            wf.writeframes(struct.pack(f"<{n_frames}h", *samples))
+
+        # Mock whisper so it doesn't need the real model
+        mock_seg = MagicMock()
+        mock_seg.start = 0.0
+        mock_seg.end = 1.0
+        mock_seg.text = " Hello"
+
+        mock_info = MagicMock()
+        mock_info.language = "en"
+        mock_info.duration = 1.0
+
+        mock_model_cls = MagicMock()
+        mock_model_instance = MagicMock()
+        mock_model_instance.transcribe.return_value = (iter([mock_seg]), mock_info)
+        mock_model_cls.return_value = mock_model_instance
+
+        mock_fw = MagicMock()
+        mock_fw.WhisperModel = mock_model_cls
+
+        with patch.dict("sys.modules", {"faster_whisper": mock_fw}):
+            result = _process_single_transcription(
+                (str(wav_path), "tiny", "cpu", "int8")
+            )
+
+        # Should have proceeded to Whisper — no silence warning
+        assert not any("silent" in w.lower() or "Skipped" in w for w in result.warnings)
+        assert result.document is not None
+        assert result.transcript is not None
+
+
+# ---------------------------------------------------------------------------
 # Tests: TranscriptionResult model
 # ---------------------------------------------------------------------------
 
@@ -182,7 +291,10 @@ class TestTranscriptionProcessor:
         """Processor should return an error result when faster-whisper is not installed."""
         from casestack.processors.transcription import _process_single_transcription
 
-        with patch.dict("sys.modules", {"faster_whisper": None}):
+        with patch(
+            "casestack.processors.transcription._check_audio_content",
+            return_value=(True, 1.0, -10.0),
+        ), patch.dict("sys.modules", {"faster_whisper": None}):
             result = _process_single_transcription(
                 (str(silent_wav), "tiny", "cpu", "int8")
             )
@@ -221,7 +333,10 @@ class TestTranscriptionProcessor:
         mock_fw = MagicMock()
         mock_fw.WhisperModel = mock_model_cls
 
-        with patch.dict("sys.modules", {"faster_whisper": mock_fw}):
+        with patch(
+            "casestack.processors.transcription._check_audio_content",
+            return_value=(True, 3.0, -10.0),
+        ), patch.dict("sys.modules", {"faster_whisper": mock_fw}):
             result = _process_single_transcription(
                 (str(silent_wav), "tiny", "cpu", "int8")
             )
