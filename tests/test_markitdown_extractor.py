@@ -146,7 +146,7 @@ class TestProcessSingle:
 
 class TestBatchResume:
     def test_resume_skips_existing(self, tmp_path: Path):
-        """Files with existing output JSON should be skipped."""
+        """Files with existing output JSON should be skipped (not reprocessed)."""
         from casestack.config import Settings
 
         settings = Settings(output_dir=tmp_path / "output")
@@ -172,8 +172,8 @@ class TestBatchResume:
         proc = MarkitdownProcessor(settings)
         results = proc.process_batch([txt], ocr_dir, max_workers=1)
 
-        assert len(results) == 1
-        assert results[0].processing_time_ms == 42  # The cached one
+        # Skipped files are not returned — only newly processed ones
+        assert len(results) == 0
 
     def test_serialization_roundtrip(self, tmp_path: Path):
         """ProcessingResult from markitdown should survive JSON roundtrip."""

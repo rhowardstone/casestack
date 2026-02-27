@@ -201,22 +201,19 @@ class TranscriptionProcessor:
         transcripts_dir.mkdir(parents=True, exist_ok=True)
         results: list[TranscriptionResult] = []
 
-        # Filename-based resume check
+        # Filename-based resume check — existence only, no deserialization
         existing = set(f.stem for f in transcripts_dir.glob("*.json"))
         to_process: list[tuple[Path, str]] = []
+        skipped = 0
         for p in paths:
             name_key = p.stem
             if name_key in existing:
-                out_path = transcripts_dir / f"{name_key}.json"
-                try:
-                    prev = TranscriptionResult.model_validate_json(
-                        out_path.read_text(encoding="utf-8")
-                    )
-                    results.append(prev)
-                except Exception:
-                    to_process.append((p, name_key))
+                skipped += 1
             else:
                 to_process.append((p, name_key))
+
+        if skipped:
+            logger.info("Transcription resume: %d already processed, %d new", skipped, len(to_process))
 
         if not to_process:
             return results

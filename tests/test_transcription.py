@@ -235,7 +235,7 @@ class TestTranscriptionProcessor:
         assert len(result.pages) >= 1
 
     def test_resume_skips_existing(self, silent_wav: Path, tmp_path: Path):
-        """Files with existing output JSON should be skipped."""
+        """Files with existing output JSON should be skipped (not reprocessed)."""
         from casestack.config import Settings
 
         settings = Settings(
@@ -264,8 +264,8 @@ class TestTranscriptionProcessor:
             proc = TranscriptionProcessor(settings)
             results = proc.process_batch([silent_wav], settings.output_dir)
 
-        assert len(results) == 1
-        assert results[0].processing_time_ms == 50  # The cached one
+        # Skipped files are not returned — only newly processed ones
+        assert len(results) == 0
 
 
 # ---------------------------------------------------------------------------

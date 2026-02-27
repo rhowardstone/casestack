@@ -45,6 +45,11 @@ def run_ingest(
 
             processor = OcrProcessor(settings, backend=case.ocr_backend)
 
+            # Check how many are already done before batching
+            already_done = sum(1 for _ in ocr_dir.glob("*.json"))
+            if already_done:
+                console.print(f"  [dim]{already_done:,} already processed (resume)[/dim]")
+
             # Process in batches to avoid OOM on large corpora
             batch_size = 5000
             ok = 0
@@ -62,7 +67,9 @@ def run_ingest(
                 )
                 ok += sum(1 for r in results if r.document is not None)
                 del results  # Free memory between batches
-            console.print(f"  [green]{ok:,} succeeded[/green]")
+            if ok:
+                console.print(f"  [green]{ok:,} newly processed[/green]")
+            console.print(f"  [green]Total: {sum(1 for _ in ocr_dir.glob('*.json')):,} documents[/green]")
         else:
             console.print("  [yellow]No PDFs found, scanning for text files...[/yellow]")
             _ingest_text_files(case.documents_dir, ocr_dir)

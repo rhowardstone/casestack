@@ -211,26 +211,19 @@ class OcrProcessor:
         workers = max_workers or self.config.max_workers
 
         # Check which files are already processed (resumable).
-        # Use filename-based keys for the initial scan to avoid reading
-        # every file's contents upfront (which is prohibitive at scale).
-        # Content hashing happens inside each worker.
+        # Existence-only check — no deserialization — for speed at scale.
         existing = set(f.stem for f in output_dir.glob("*.json"))
         to_process: list[tuple[Path, str]] = []
+        skipped = 0
         for p in paths:
-            # Quick check: if any output file starts with this filename stem,
-            # assume it's done.  Content-hash keying happens at write time.
             name_key = p.stem
             if name_key in existing:
-                out_path = output_dir / f"{name_key}.json"
-                try:
-                    prev = ProcessingResult.model_validate_json(
-                        out_path.read_text(encoding="utf-8")
-                    )
-                    results.append(prev)
-                except Exception:
-                    to_process.append((p, name_key))
+                skipped += 1
             else:
                 to_process.append((p, name_key))
+
+        if skipped:
+            logger.info("OCR resume: %d files already processed, %d new", skipped, len(to_process))
 
         if not to_process:
             return results
