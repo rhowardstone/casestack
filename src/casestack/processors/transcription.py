@@ -380,12 +380,9 @@ class TranscriptionProcessor:
         with progress:
             task = progress.add_task("Transcribing", total=len(to_process))
             for file_path, file_key in to_process:
-                # Quick pre-check for duration display
-                _, est_dur, _ = _check_audio_content(str(file_path), sample_seconds=0.1)
-                dur_label = f" ({est_dur:.0f}s)" if est_dur > 0 else ""
                 progress.update(
                     task,
-                    description=f"Transcribe: {file_path.name[:30]}{dur_label}",
+                    description=f"Transcribe: {file_path.name[:40]}",
                 )
                 result = self.process_file(file_path)
                 results.append(result)
