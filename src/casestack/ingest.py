@@ -118,6 +118,42 @@ def run_ingest(
     else:
         console.print("\n[dim]Step 1b/5: Transcription — no media files found[/dim]")
 
+    # --- Step 1c: Document conversion (office/text/other) ---
+    from casestack.processors.markitdown_extractor import MARKITDOWN_EXTENSIONS
+    from casestack.processors.transcription import MEDIA_EXTENSIONS as _MEDIA_EXT
+
+    _handled_extensions = {".pdf"} | _MEDIA_EXT
+    doc_convert_files = sorted(
+        f
+        for f in case.documents_dir.rglob("*")
+        if f.suffix.lower() in MARKITDOWN_EXTENSIONS
+        and f.suffix.lower() not in _handled_extensions
+        and f.is_file()
+    )
+    if doc_convert_files:
+        console.print(
+            f"\n[bold]Step 1c/5: Document conversion[/bold]"
+            f" — {len(doc_convert_files):,} files"
+        )
+        try:
+            import markitdown as _md  # noqa: F401
+
+            from casestack.processors.markitdown_extractor import MarkitdownProcessor
+
+            mp = MarkitdownProcessor(settings)
+            m_results = mp.process_batch(doc_convert_files, ocr_dir)
+            ok = sum(1 for r in m_results if r.document is not None)
+            console.print(f"  [green]{ok:,} converted[/green]")
+        except ImportError:
+            console.print(
+                "  [yellow]markitdown not installed — skipping."
+                " Install with: pip install 'casestack[documents]'[/yellow]"
+            )
+    else:
+        console.print(
+            "\n[dim]Step 1c/5: Document conversion — no additional files found[/dim]"
+        )
+
     # --- Step 2: Entity extraction ---
     if not skip_entities:
         console.print("\n[bold]Step 2/5: Entity extraction[/bold]")

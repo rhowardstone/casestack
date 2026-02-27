@@ -91,7 +91,7 @@ class TestMediaDiscovery:
         assert audio.issubset(MEDIA_EXTENSIONS)
 
     def test_video_extensions_detected(self):
-        video = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".wmv", ".m4v"}
+        video = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".wmv", ".m4v", ".vob", ".ts"}
         assert video.issubset(MEDIA_EXTENSIONS)
 
     def test_non_media_not_included(self):
