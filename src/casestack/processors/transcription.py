@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import multiprocessing
 import time
 from pathlib import Path
 
@@ -234,6 +235,73 @@ def _process_single_transcription(
     )
 
 
+def _subprocess_worker(
+    args: tuple[str, str, str, str],
+    result_queue: multiprocessing.Queue,
+) -> None:
+    """Entry point for the transcription subprocess."""
+    try:
+        result = _process_single_transcription(args)
+        result_queue.put(result.model_dump_json())
+    except Exception as exc:
+        # If even serialization fails, send a minimal error result
+        result_queue.put(json.dumps({
+            "source_path": args[0],
+            "transcript": None,
+            "document": None,
+            "pages": [],
+            "processing_time_ms": 0,
+            "errors": [f"Subprocess error: {exc}"],
+            "warnings": [],
+        }))
+
+
+def _run_in_subprocess(
+    file_path: str,
+    whisper_model: str,
+    device: str,
+    compute_type: str,
+    timeout: float = 600.0,
+) -> TranscriptionResult:
+    """Run transcription in a child process to survive segfaults."""
+    ctx = multiprocessing.get_context("spawn")
+    result_queue: multiprocessing.Queue = ctx.Queue()
+    args = (file_path, whisper_model, device, compute_type)
+    proc = ctx.Process(target=_subprocess_worker, args=(args, result_queue))
+    proc.start()
+    proc.join(timeout=timeout)
+
+    path = Path(file_path)
+
+    if proc.is_alive():
+        proc.kill()
+        proc.join()
+        return TranscriptionResult(
+            source_path=file_path,
+            processing_time_ms=int(timeout * 1000),
+            errors=[f"Transcription timed out after {timeout:.0f}s for {path.name}"],
+        )
+
+    if proc.exitcode != 0:
+        return TranscriptionResult(
+            source_path=file_path,
+            processing_time_ms=0,
+            errors=[
+                f"Transcription subprocess crashed (exit code {proc.exitcode}) for {path.name}"
+            ],
+        )
+
+    try:
+        raw = result_queue.get_nowait()
+        return TranscriptionResult.model_validate_json(raw)
+    except Exception as exc:
+        return TranscriptionResult(
+            source_path=file_path,
+            processing_time_ms=0,
+            errors=[f"Failed to read subprocess result for {path.name}: {exc}"],
+        )
+
+
 class TranscriptionProcessor:
     """Process audio/video files through Whisper transcription."""
 
@@ -259,9 +327,14 @@ class TranscriptionProcessor:
         )
 
     def process_file(self, path: Path) -> TranscriptionResult:
-        """Transcribe a single audio/video file."""
-        return _process_single_transcription(
-            (str(path), self.whisper_model, self.device, self.compute_type)
+        """Transcribe a single audio/video file in a subprocess.
+
+        Running in a subprocess isolates the main pipeline from segfaults
+        in native code (CTranslate2, PyAV, CUDA) that cannot be caught
+        with try/except.
+        """
+        return _run_in_subprocess(
+            str(path), self.whisper_model, self.device, self.compute_type
         )
 
     def process_batch(
