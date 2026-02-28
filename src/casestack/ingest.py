@@ -232,31 +232,47 @@ def run_ingest(
         source_dir = entities_dir if list(entities_dir.glob("*.json")) else ocr_dir
         json_files = sorted(source_dir.glob("*.json"))
         if json_files:
-            from casestack.models.document import Document, ProcessingResult
-            from casestack.processors.dedup import Deduplicator
+            import hashlib
 
-            documents: list[Document] = []
+            from casestack.processors.dedup import DedupRecord, Deduplicator
+
+            def _dedup_content_hash(text: str) -> str:
+                normalised = " ".join(text.lower().split())
+                return hashlib.sha256(normalised.encode("utf-8")).hexdigest()
+
+            records: list[DedupRecord] = []
             for jf in json_files:
                 try:
                     raw = json.loads(jf.read_text(encoding="utf-8"))
-                    if "document" in raw and raw["document"] is not None:
-                        result = ProcessingResult.model_validate(raw)
-                        if result.document:
-                            documents.append(result.document)
-                    elif "id" in raw and "title" in raw:
-                        documents.append(Document.model_validate(raw))
+                    doc = raw.get("document") or raw
+                    if not (doc.get("id") and doc.get("title")):
+                        continue
+                    text = doc.get("ocrText", "") or ""
+                    records.append(DedupRecord(
+                        id=doc["id"],
+                        title=doc.get("title", ""),
+                        bates_range=doc.get("batesRange"),
+                        content_hash=_dedup_content_hash(text) if text.strip() else None,
+                    ))
                 except Exception:
                     continue
 
+            console.print(f"  [dim]{len(records):,} records loaded (lightweight)[/dim]")
+            import logging
+            logging.basicConfig(level=logging.INFO, format="  %(message)s")
             deduplicator = Deduplicator(threshold=case.dedup_threshold)
-            pairs = deduplicator.find_duplicates(documents)
+            pairs = deduplicator.find_duplicates(records)
             console.print(f"  [green]{len(pairs)} duplicate pairs found[/green]")
 
             report_path = settings.output_dir / "dedup-report.json"
-            report_path.write_text(
-                json.dumps([p.model_dump() for p in pairs], indent=2, default=str),
-                encoding="utf-8",
-            )
+            with open(report_path, "w", encoding="utf-8") as f:
+                f.write("[\n")
+                for idx, p in enumerate(pairs):
+                    if idx:
+                        f.write(",\n")
+                    json.dump(p.model_dump(), f, default=str)
+                f.write("\n]\n")
+            del pairs, records  # Free memory before SQLite export
     else:
         console.print("\n[dim]Step 3/5: Dedup — skipped[/dim]")
 
