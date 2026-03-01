@@ -329,6 +329,27 @@ def run_ingest(
     else:
         console.print("\n[dim]Step 1f: Image analysis — no extracted images[/dim]")
 
+    # --- Step 1g: Redaction analysis (optional) ---
+    if _enabled("redaction_analysis"):
+        pdfs = sorted(case.documents_dir.rglob("*.pdf"))
+        if pdfs:
+            console.print(f"\n[bold]Step 1g: Redaction analysis[/bold] — {len(pdfs):,} PDFs")
+            from casestack.processors.redaction import RedactionAnalyzer
+
+            analyzer = RedactionAnalyzer()
+            redaction_results = analyzer.analyze_batch(
+                pdfs,
+                settings.output_dir / "redactions",
+                max_workers=case.redaction_workers,
+            )
+            total_redactions = sum(r.total_redactions for r in redaction_results)
+            recoverable = sum(r.recoverable for r in redaction_results)
+            console.print(f"  [green]{total_redactions:,} redactions found ({recoverable:,} recoverable)[/green]")
+        else:
+            console.print("\n[dim]Step 1g: Redaction analysis — no PDFs found[/dim]")
+    else:
+        console.print("\n[dim]Step 1g: Redaction analysis — disabled[/dim]")
+
     # --- Step 2: Entity extraction ---
     if _enabled("entities"):
         console.print("\n[bold]Step 2: Entity extraction[/bold]")
