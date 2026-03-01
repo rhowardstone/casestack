@@ -502,6 +502,21 @@ def run_ingest(
     else:
         console.print("\n[dim]Step 4b: Embeddings — disabled[/dim]")
 
+    # --- Step 4c: Knowledge graph (optional) ---
+    if _enabled("knowledge_graph"):
+        console.print(f"\n[bold]Step 4c: Knowledge graph[/bold]")
+        from casestack.processors.knowledge_graph import KnowledgeGraphBuilder
+
+        builder = KnowledgeGraphBuilder()
+        builder.add_documents(documents)
+        graph = builder.build()
+        graph_dir = settings.output_dir / "graph"
+        graph_dir.mkdir(parents=True, exist_ok=True)
+        KnowledgeGraphBuilder.export_json(graph, graph_dir / "knowledge-graph.json")
+        console.print(f"  [green]{graph.node_count} nodes, {graph.edge_count} edges[/green]")
+    else:
+        console.print("\n[dim]Step 4c: Knowledge graph — disabled[/dim]")
+
     # --- Generate Datasette config ---
     _generate_datasette_config(case, db_path)
 
