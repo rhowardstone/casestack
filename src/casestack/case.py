@@ -23,6 +23,12 @@ _ALIASES: dict[tuple[str, str], str] = {
     ("captioning", "model"): "caption_model",
     ("captioning", "char_threshold"): "caption_char_threshold",
     ("captioning", "min_image_size"): "caption_min_image_size",
+    ("captioning", "image_analysis_model"): "image_analysis_model",
+    ("images", "min_size"): "caption_min_image_size",
+    ("images", "min_bytes"): "image_min_bytes",
+    ("images", "page_scan_ratio"): "image_page_scan_ratio",
+    ("images", "analysis_model"): "image_analysis_model",
+    ("redaction", "workers"): "redaction_workers",
 }
 
 # Aliases for 3-level nested keys: section_subsection_key -> model field
@@ -65,9 +71,20 @@ class CaseConfig(BaseModel):
     caption_char_threshold: int = 100  # pages with fewer chars get captioned
     caption_min_image_size: int = 50  # skip extracted images smaller than NxN px
 
+    # Image extraction / analysis
+    image_analysis_model: str = "Qwen/Qwen2-VL-2B-Instruct"
+    image_min_bytes: int = 5120  # skip images < 5KB
+    image_page_scan_ratio: float = 0.8  # skip images covering >80% of page
+
     # Embeddings
     embedding_model: str = "nomic-ai/nomic-embed-text-v2-moe"
     embedding_dimensions: int = 768
+
+    # Redaction
+    redaction_workers: int = 4
+
+    # Pipeline step overrides (step_id -> enabled)
+    pipeline: dict[str, bool] = Field(default_factory=dict)
 
     # Serving
     serve_port: int = 8001
@@ -91,6 +108,12 @@ class CaseConfig(BaseModel):
     def db_path(self) -> Path:
         return self.output_dir / f"{self.slug}.db"
 
+    def is_step_enabled(self, step_id: str) -> bool:
+        """Check if a pipeline step is enabled for this case."""
+        from casestack.pipeline import get_enabled_steps
+
+        return step_id in get_enabled_steps(self.pipeline or None)
+
     @classmethod
     def from_yaml(cls, path: Path) -> CaseConfig:
         """Load case config from a YAML file.
@@ -106,7 +129,7 @@ class CaseConfig(BaseModel):
             raise ValueError(f"Invalid case config: {path} (expected YAML mapping, got {type(raw).__name__})")
         flat: dict = {}
         for key, value in raw.items():
-            if isinstance(value, dict) and key in ("ocr", "serve", "entities", "dedup", "transcription", "captioning"):
+            if isinstance(value, dict) and key in ("ocr", "serve", "entities", "dedup", "transcription", "captioning", "images", "redaction"):
                 for sub_key, sub_value in value.items():
                     # Handle nested dicts (e.g., serve.ask_proxy.enabled)
                     if isinstance(sub_value, dict):

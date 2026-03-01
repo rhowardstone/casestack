@@ -112,3 +112,25 @@ def test_settings_from_case():
     assert settings.data_dir == Path("./data/bridge")
     assert settings.output_dir == Path("./output/bridge")
     assert settings.ocr_backend == "pymupdf"
+
+
+def test_pipeline_defaults():
+    """Default pipeline enables core steps, disables embeddings/kg/redaction."""
+    cfg = CaseConfig(name="t", slug="t")
+    assert cfg.is_step_enabled("ocr") is True
+    assert cfg.is_step_enabled("embeddings") is False
+    assert cfg.is_step_enabled("knowledge_graph") is False
+
+
+def test_pipeline_override_from_yaml(tmp_path):
+    """pipeline section in YAML overrides defaults."""
+    f = tmp_path / "case.yaml"
+    f.write_text("name: t\nslug: t\npipeline:\n  embeddings: true\n  ocr: false\n")
+    cfg = CaseConfig.from_yaml(f)
+    assert cfg.is_step_enabled("embeddings") is True
+    assert cfg.is_step_enabled("ocr") is False
+
+
+def test_image_analysis_model_default():
+    cfg = CaseConfig(name="t", slug="t")
+    assert cfg.image_analysis_model == "Qwen/Qwen2-VL-2B-Instruct"
