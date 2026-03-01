@@ -9,6 +9,7 @@ import Heatmap from './pages/Heatmap'
 import EntityViewer from './pages/EntityViewer'
 import TranscriptBrowser from './pages/TranscriptBrowser'
 import AskAssistant from './pages/AskAssistant'
+import CaseSettings from './pages/CaseSettings'
 
 function App() {
   return (
@@ -24,6 +25,7 @@ function App() {
           <Route path="map" element={<Heatmap />} />
           <Route path="transcripts" element={<TranscriptBrowser />} />
           <Route path="ask" element={<AskAssistant />} />
+          <Route path="settings" element={<CaseSettings />} />
         </Route>
       </Routes>
     </BrowserRouter>
