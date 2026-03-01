@@ -23,7 +23,7 @@ from rich.progress import (
 )
 
 from casestack.config import Settings
-from casestack.models.forensics import PageCaption
+from casestack.models.forensics import ExtractedImage, PageCaption
 
 logger = logging.getLogger(__name__)
 
@@ -446,6 +446,121 @@ class CaptionProcessor:
             if p.stem.lower() == stem.lower():
                 return p
         return None
+
+    def analyze_images(
+        self,
+        images: list[ExtractedImage],
+        output_dir: Path,
+    ) -> list[ExtractedImage]:
+        """Run vision model on extracted images to populate descriptions.
+
+        Parameters
+        ----------
+        images:
+            List of ExtractedImage objects with file_path set.
+        output_dir:
+            Pipeline output directory (results saved under output_dir/image_analysis/).
+
+        Returns
+        -------
+        list[ExtractedImage]
+            The same images with description fields populated.
+        """
+        from PIL import Image
+
+        analysis_dir = output_dir / "image_analysis"
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+
+        # Group images by document for resume and crash-safe saving
+        doc_groups: dict[str, list[ExtractedImage]] = {}
+        for img in images:
+            doc_groups.setdefault(img.document_id, []).append(img)
+
+        # Resume: load existing analysis results
+        existing = set(f.stem for f in analysis_dir.glob("*.json"))
+        for doc_id in existing:
+            if doc_id in doc_groups:
+                try:
+                    saved = json.loads(
+                        (analysis_dir / f"{doc_id}.json").read_text(encoding="utf-8")
+                    )
+                    desc_map = {
+                        (e["page_number"], e["image_index"]): e.get("description")
+                        for e in saved
+                    }
+                    for img in doc_groups[doc_id]:
+                        desc = desc_map.get((img.page_number, img.image_index))
+                        if desc:
+                            img.description = desc
+                except Exception:
+                    continue
+
+        to_analyze = [
+            img for img in images if img.description is None and img.file_path
+        ]
+
+        if not to_analyze:
+            if images:
+                logger.info("Image analysis resume: all %d images already analyzed", len(images))
+            return images
+
+        model_label = "Qwen2-VL" if self._is_qwen else "Florence-2"
+        logger.info(
+            "Analyzing images (%s): %d to process (%d already done)",
+            model_label,
+            len(to_analyze),
+            len(images) - len(to_analyze),
+        )
+
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+        )
+
+        # Track which docs were modified for saving
+        dirty_docs: set[str] = set()
+
+        with progress:
+            task = progress.add_task("Analyzing images", total=len(to_analyze))
+
+            for img in to_analyze:
+                progress.update(
+                    task,
+                    description=f"Analyze: {Path(img.file_path).name}",
+                )
+
+                try:
+                    pil_img = Image.open(img.file_path).convert("RGB")
+                    caption, _ocr = self.caption_page(pil_img)
+                    img.description = caption
+                    dirty_docs.add(img.document_id)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to analyze image %s: %s",
+                        img.file_path,
+                        exc,
+                    )
+
+                progress.advance(task)
+
+        # Save results per document (crash-safe)
+        for doc_id in dirty_docs:
+            if doc_id in doc_groups:
+                out_path = analysis_dir / f"{doc_id}.json"
+                out_path.write_text(
+                    json.dumps(
+                        [i.model_dump() for i in doc_groups[doc_id]],
+                        indent=2,
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+
+        return images
 
     def _load_existing_captions(self, captions_dir: Path) -> list[PageCaption]:
         """Load all previously saved captions from disk."""

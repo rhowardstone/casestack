@@ -31,6 +31,7 @@ def run_ingest(
 
     transcripts_collected: list = []  # Transcript objects for SQLite export
     captions_collected: list = []  # PageCaption objects for SQLite export
+    images_collected: list = []  # ExtractedImage objects for SQLite export
 
     console.print(f"\n[bold cyan]CaseStack[/bold cyan] — Ingesting: {case.name}")
     console.print(f"  Documents: {case.documents_dir}")
@@ -191,6 +192,135 @@ def run_ingest(
     else:
         console.print("\n[dim]Step 1d/5: Image captioning — skipped (OCR skipped)[/dim]")
 
+    # --- Step 1e: Image extraction from PDFs ---
+    if not skip_ocr:
+        pdfs = sorted(case.documents_dir.rglob("*.pdf"))
+        if pdfs:
+            console.print(f"\n[bold]Step 1e/5: Image extraction[/bold] — {len(pdfs):,} PDFs")
+            from casestack.processors.pymupdf_extractor import PyMuPdfExtractor
+            from casestack.models.forensics import ExtractedImage
+
+            images_dir = settings.output_dir / "images"
+            images_dir.mkdir(parents=True, exist_ok=True)
+            extractor = PyMuPdfExtractor()
+            min_size = case.caption_min_image_size
+            min_bytes = 5 * 1024  # 5KB
+
+            # Read OCR JSON to get doc_id for each PDF
+            _pdf_doc_ids: dict[str, str] = {}
+            for jf in ocr_dir.glob("*.json"):
+                try:
+                    raw = json.loads(jf.read_text(encoding="utf-8"))
+                    doc_data = raw.get("document") or raw
+                    source = raw.get("source_path", "")
+                    doc_id = doc_data.get("id", "")
+                    if source and doc_id:
+                        _pdf_doc_ids[Path(source).name] = doc_id
+                    if doc_id:
+                        _pdf_doc_ids[jf.stem] = doc_id
+                except Exception:
+                    continue
+
+            new_count = 0
+            skipped_small = 0
+            for pdf_path in pdfs:
+                doc_id = _pdf_doc_ids.get(pdf_path.name) or _pdf_doc_ids.get(pdf_path.stem, pdf_path.stem)
+                doc_img_dir = images_dir / doc_id
+                # Resume: skip if already extracted
+                if doc_img_dir.exists() and any(doc_img_dir.glob("*.png")):
+                    # Reload existing images for this doc
+                    for png in sorted(doc_img_dir.glob("*.png")):
+                        from PIL import Image as _PILImage
+                        try:
+                            im = _PILImage.open(png)
+                            w, h = im.size
+                            im.close()
+                        except Exception:
+                            continue
+                        images_collected.append(ExtractedImage(
+                            document_id=doc_id,
+                            page_number=int(png.stem.split("_")[0].lstrip("p") or 0),
+                            image_index=int(png.stem.split("_")[1]) if "_" in png.stem else 0,
+                            width=w,
+                            height=h,
+                            format="png",
+                            file_path=str(png),
+                            size_bytes=png.stat().st_size,
+                        ))
+                    continue
+
+                try:
+                    page_images = extractor.extract_images(pdf_path)
+                except Exception as exc:
+                    console.print(f"  [yellow]Failed to extract images from {pdf_path.name}: {exc}[/yellow]")
+                    continue
+
+                if not page_images:
+                    continue
+
+                doc_img_dir.mkdir(parents=True, exist_ok=True)
+                for pi in page_images:
+                    # Filter tiny/decorative images
+                    if pi.width < min_size or pi.height < min_size:
+                        skipped_small += 1
+                        continue
+                    if len(pi.image_bytes) < min_bytes:
+                        skipped_small += 1
+                        continue
+
+                    fname = f"p{pi.page_number}_{pi.image_index}.png"
+                    img_path = doc_img_dir / fname
+                    img_path.write_bytes(pi.image_bytes)
+
+                    images_collected.append(ExtractedImage(
+                        document_id=doc_id,
+                        page_number=pi.page_number,
+                        image_index=pi.image_index,
+                        width=pi.width,
+                        height=pi.height,
+                        format="png",
+                        file_path=str(img_path),
+                        size_bytes=len(pi.image_bytes),
+                    ))
+                    new_count += 1
+
+            console.print(f"  [green]{new_count:,} images extracted[/green]")
+            if skipped_small:
+                console.print(f"  [dim]{skipped_small:,} tiny/decorative images skipped[/dim]")
+            console.print(f"  [green]Total: {len(images_collected):,} images[/green]")
+        else:
+            console.print("\n[dim]Step 1e/5: Image extraction — no PDFs found[/dim]")
+    else:
+        console.print("\n[dim]Step 1e/5: Image extraction — skipped (OCR skipped)[/dim]")
+
+    # --- Step 1f: Image analysis (optional, requires torch) ---
+    if images_collected:
+        try:
+            import torch as _torch  # noqa: F401
+
+            from casestack.processors.captioner import CaptionProcessor as _CP
+
+            console.print(f"\n[bold]Step 1f/5: Image analysis[/bold] — {len(images_collected):,} images")
+            # Use Qwen2-VL for extracted images by default
+            analysis_model = case.caption_model
+            if "florence" in analysis_model.lower():
+                # Default to Qwen2-VL for image analysis even if page captioning uses Florence
+                analysis_model = "Qwen/Qwen2-VL-2B-Instruct"
+            cp = _CP(settings, model_name=analysis_model)
+            images_collected = cp.analyze_images(
+                images=images_collected,
+                output_dir=settings.output_dir,
+            )
+            described = sum(1 for i in images_collected if i.description)
+            console.print(f"  [green]{described:,} images analyzed[/green]")
+        except ImportError:
+            console.print(
+                "\n[dim]Step 1f/5: Image analysis — skipped"
+                " (install with: pip install 'casestack[captioning]')[/dim]"
+            )
+    else:
+        console.print("\n[dim]Step 1f/5: Image analysis — no extracted images[/dim]")
+
     # --- Step 2: Entity extraction ---
     if not skip_entities:
         console.print("\n[bold]Step 2/5: Entity extraction[/bold]")
@@ -339,6 +469,7 @@ def run_ingest(
         pages=all_pages,
         transcripts=transcripts_collected or None,
         captions=captions_collected or None,
+        images=images_collected or None,
     )
     console.print(f"  [green]Exported {len(documents)} documents, {len(all_pages)} pages -> {db_path}[/green]")
 

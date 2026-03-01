@@ -22,6 +22,7 @@ _ALIASES: dict[tuple[str, str], str] = {
     ("transcription", "device"): "whisper_device",
     ("captioning", "model"): "caption_model",
     ("captioning", "char_threshold"): "caption_char_threshold",
+    ("captioning", "min_image_size"): "caption_min_image_size",
 }
 
 # Aliases for 3-level nested keys: section_subsection_key -> model field
@@ -62,6 +63,7 @@ class CaseConfig(BaseModel):
     # Captioning
     caption_model: str = "microsoft/Florence-2-base"
     caption_char_threshold: int = 100  # pages with fewer chars get captioned
+    caption_min_image_size: int = 50  # skip extracted images smaller than NxN px
 
     # Embeddings
     embedding_model: str = "nomic-ai/nomic-embed-text-v2-moe"

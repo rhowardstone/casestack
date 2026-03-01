@@ -221,6 +221,28 @@ CREATE TRIGGER IF NOT EXISTS captions_au AFTER UPDATE ON page_captions BEGIN
     INSERT INTO captions_fts(rowid, caption, ocr_text)
     VALUES (new.id, new.caption, new.ocr_text);
 END;
+
+-- FTS5 on extracted image descriptions
+CREATE VIRTUAL TABLE IF NOT EXISTS images_fts USING fts5(
+    description,
+    content='extracted_images',
+    content_rowid='id'
+);
+
+CREATE TRIGGER IF NOT EXISTS images_fts_ai AFTER INSERT ON extracted_images BEGIN
+    INSERT INTO images_fts(rowid, description) VALUES (new.id, new.description);
+END;
+
+CREATE TRIGGER IF NOT EXISTS images_fts_ad AFTER DELETE ON extracted_images BEGIN
+    INSERT INTO images_fts(images_fts, rowid, description)
+    VALUES ('delete', old.id, old.description);
+END;
+
+CREATE TRIGGER IF NOT EXISTS images_fts_au AFTER UPDATE ON extracted_images BEGIN
+    INSERT INTO images_fts(images_fts, rowid, description)
+    VALUES ('delete', old.id, old.description);
+    INSERT INTO images_fts(rowid, description) VALUES (new.id, new.description);
+END;
 """
 
 DEFAULT_DB_NAME = "corpus.db"
@@ -308,6 +330,8 @@ class SqliteExporter:
             conn.execute("INSERT INTO transcripts_fts(transcripts_fts) VALUES ('optimize')")
             if captions:
                 conn.execute("INSERT INTO captions_fts(captions_fts) VALUES ('optimize')")
+            if images:
+                conn.execute("INSERT INTO images_fts(images_fts) VALUES ('optimize')")
             conn.execute("ANALYZE")
             conn.commit()
 

@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     # Captioning
     caption_model: str = "microsoft/Florence-2-base"
     caption_char_threshold: int = 100
+    caption_min_image_size: int = 50
 
     # Embedding settings
     embedding_model: str = "nomic-ai/nomic-embed-text-v2-moe"
@@ -76,6 +77,7 @@ class Settings(BaseSettings):
             whisper_device=case.whisper_device,
             caption_model=case.caption_model,
             caption_char_threshold=case.caption_char_threshold,
+            caption_min_image_size=case.caption_min_image_size,
         )
 
     def ensure_dirs(self) -> None:
