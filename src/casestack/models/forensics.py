@@ -98,6 +98,15 @@ class ExtractedEntity(BaseModel):
     person_id: str | None = None  # Matched person ID if applicable
 
 
+class PageCaption(BaseModel):
+    """An AI-generated caption for an image-heavy document page."""
+
+    document_id: str
+    page_number: int
+    caption: str
+    ocr_text: str | None = None  # Florence-2 OCR output (for handwriting)
+
+
 class EmbeddingChunk(BaseModel):
     """A document chunk with its embedding vector."""
 

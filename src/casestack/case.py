@@ -20,6 +20,8 @@ _ALIASES: dict[tuple[str, str], str] = {
     ("serve", "title"): "serve_title",
     ("transcription", "model"): "whisper_model",
     ("transcription", "device"): "whisper_device",
+    ("captioning", "model"): "caption_model",
+    ("captioning", "char_threshold"): "caption_char_threshold",
 }
 
 # Aliases for 3-level nested keys: section_subsection_key -> model field
@@ -56,6 +58,10 @@ class CaseConfig(BaseModel):
     # Transcription
     whisper_model: str = "auto"
     whisper_device: str = "auto"
+
+    # Captioning
+    caption_model: str = "microsoft/Florence-2-base"
+    caption_char_threshold: int = 100  # pages with fewer chars get captioned
 
     # Embeddings
     embedding_model: str = "nomic-ai/nomic-embed-text-v2-moe"
@@ -98,7 +104,7 @@ class CaseConfig(BaseModel):
             raise ValueError(f"Invalid case config: {path} (expected YAML mapping, got {type(raw).__name__})")
         flat: dict = {}
         for key, value in raw.items():
-            if isinstance(value, dict) and key in ("ocr", "serve", "entities", "dedup", "transcription"):
+            if isinstance(value, dict) and key in ("ocr", "serve", "entities", "dedup", "transcription", "captioning"):
                 for sub_key, sub_value in value.items():
                     # Handle nested dicts (e.g., serve.ask_proxy.enabled)
                     if isinstance(sub_value, dict):

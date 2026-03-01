@@ -30,6 +30,7 @@ def run_ingest(
     entities_dir.mkdir(parents=True, exist_ok=True)
 
     transcripts_collected: list = []  # Transcript objects for SQLite export
+    captions_collected: list = []  # PageCaption objects for SQLite export
 
     console.print(f"\n[bold cyan]CaseStack[/bold cyan] — Ingesting: {case.name}")
     console.print(f"  Documents: {case.documents_dir}")
@@ -160,6 +161,35 @@ def run_ingest(
         console.print(
             "\n[dim]Step 1c/5: Document conversion — no additional files found[/dim]"
         )
+
+    # --- Step 1d: Image captioning (optional) ---
+    if not skip_ocr:
+        try:
+            import torch as _torch  # noqa: F401
+
+            from casestack.processors.captioner import CaptionProcessor
+
+            # Check if there are OCR results to scan for image-heavy pages
+            ocr_jsons = list(ocr_dir.glob("*.json"))
+            if ocr_jsons:
+                console.print(f"\n[bold]Step 1d/5: Image captioning[/bold]")
+                cp = CaptionProcessor(settings, model_name=case.caption_model)
+                captions_collected = cp.process_batch(
+                    ocr_dir=ocr_dir,
+                    documents_dir=case.documents_dir,
+                    output_dir=settings.output_dir,
+                    char_threshold=case.caption_char_threshold,
+                )
+                console.print(f"  [green]{len(captions_collected):,} page captions generated[/green]")
+            else:
+                console.print("\n[dim]Step 1d/5: Image captioning — no OCR output to scan[/dim]")
+        except ImportError:
+            console.print(
+                "\n[dim]Step 1d/5: Image captioning — skipped"
+                " (install with: pip install 'casestack[captioning]')[/dim]"
+            )
+    else:
+        console.print("\n[dim]Step 1d/5: Image captioning — skipped (OCR skipped)[/dim]")
 
     # --- Step 2: Entity extraction ---
     if not skip_entities:
@@ -308,6 +338,7 @@ def run_ingest(
         db_path=db_path,
         pages=all_pages,
         transcripts=transcripts_collected or None,
+        captions=captions_collected or None,
     )
     console.print(f"  [green]Exported {len(documents)} documents, {len(all_pages)} pages -> {db_path}[/green]")
 

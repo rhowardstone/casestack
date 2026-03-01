@@ -20,6 +20,7 @@ from casestack.models.document import Document, Page, Person
 from casestack.models.forensics import (
     ExtractedEntity,
     ExtractedImage,
+    PageCaption,
     RecoveredText,
     RedactionScore,
     Transcript,
@@ -183,6 +184,43 @@ CREATE INDEX IF NOT EXISTS idx_entities_doc ON extracted_entities(document_id);
 CREATE INDEX IF NOT EXISTS idx_entities_type ON extracted_entities(entity_type);
 CREATE INDEX IF NOT EXISTS idx_images_doc ON extracted_images(document_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON document_chunks(document_id);
+
+-- Image captions for image-heavy pages
+CREATE TABLE IF NOT EXISTS page_captions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id TEXT NOT NULL,
+    page_number INTEGER NOT NULL,
+    caption TEXT NOT NULL,
+    ocr_text TEXT,
+    UNIQUE(document_id, page_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_captions_doc ON page_captions(document_id);
+
+-- FTS5 on captions for full-text search
+CREATE VIRTUAL TABLE IF NOT EXISTS captions_fts USING fts5(
+    caption, ocr_text,
+    content='page_captions',
+    content_rowid='id'
+);
+
+-- FTS sync triggers for captions
+CREATE TRIGGER IF NOT EXISTS captions_ai AFTER INSERT ON page_captions BEGIN
+    INSERT INTO captions_fts(rowid, caption, ocr_text)
+    VALUES (new.id, new.caption, new.ocr_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS captions_ad AFTER DELETE ON page_captions BEGIN
+    INSERT INTO captions_fts(captions_fts, rowid, caption, ocr_text)
+    VALUES ('delete', old.id, old.caption, old.ocr_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS captions_au AFTER UPDATE ON page_captions BEGIN
+    INSERT INTO captions_fts(captions_fts, rowid, caption, ocr_text)
+    VALUES ('delete', old.id, old.caption, old.ocr_text);
+    INSERT INTO captions_fts(rowid, caption, ocr_text)
+    VALUES (new.id, new.caption, new.ocr_text);
+END;
 """
 
 DEFAULT_DB_NAME = "corpus.db"
@@ -206,6 +244,7 @@ class SqliteExporter:
         transcripts: list[Transcript] | None = None,
         entities: list[ExtractedEntity] | None = None,
         images: list[ExtractedImage] | None = None,
+        captions: list[PageCaption] | None = None,
     ) -> Path:
         """Create a SQLite database with all pipeline data.
 
@@ -261,10 +300,14 @@ class SqliteExporter:
                 self._insert_entities(conn, entities)
             if images:
                 self._insert_images(conn, images)
+            if captions:
+                self._insert_captions(conn, captions)
 
             # Optimize FTS5 indices
             conn.execute("INSERT INTO pages_fts(pages_fts) VALUES ('optimize')")
             conn.execute("INSERT INTO transcripts_fts(transcripts_fts) VALUES ('optimize')")
+            if captions:
+                conn.execute("INSERT INTO captions_fts(captions_fts) VALUES ('optimize')")
             conn.execute("ANALYZE")
             conn.commit()
 
@@ -287,6 +330,8 @@ class SqliteExporter:
             self._console.print(f"  Entities:         {len(entities):,}")
         if images:
             self._console.print(f"  Images:           {len(images):,}")
+        if captions:
+            self._console.print(f"  Captions:         {len(captions):,}")
         self._console.print(f"  Size:             {size_mb:.1f} MB")
         self._console.print("  FTS5 index:       pages.text_content, transcripts.text")
 
@@ -498,3 +543,18 @@ class SqliteExporter:
             rows,
         )
         self._console.print(f"  [dim]Inserted {len(rows):,} images[/dim]")
+
+    def _insert_captions(
+        self, conn: sqlite3.Connection, captions: list[PageCaption]
+    ) -> None:
+        rows = [
+            (c.document_id, c.page_number, c.caption, c.ocr_text)
+            for c in captions
+        ]
+        conn.executemany(
+            """INSERT OR REPLACE INTO page_captions
+               (document_id, page_number, caption, ocr_text)
+               VALUES (?, ?, ?, ?)""",
+            rows,
+        )
+        self._console.print(f"  [dim]Inserted {len(rows):,} page captions[/dim]")

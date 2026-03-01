@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     whisper_model: str = "auto"
     whisper_device: str = "auto"
 
+    # Captioning
+    caption_model: str = "microsoft/Florence-2-base"
+    caption_char_threshold: int = 100
+
     # Embedding settings
     embedding_model: str = "nomic-ai/nomic-embed-text-v2-moe"
     embedding_dimensions: int = 768  # 768 full, 256 Matryoshka
@@ -70,6 +74,8 @@ class Settings(BaseSettings):
             embedding_dimensions=case.embedding_dimensions,
             whisper_model=case.whisper_model,
             whisper_device=case.whisper_device,
+            caption_model=case.caption_model,
+            caption_char_threshold=case.caption_char_threshold,
         )
 
     def ensure_dirs(self) -> None:
