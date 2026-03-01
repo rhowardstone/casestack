@@ -4,6 +4,7 @@ import NewCaseWizard from './pages/NewCaseWizard'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import Search from './pages/Search'
+import Heatmap from './pages/Heatmap'
 
 function App() {
   return (
@@ -14,6 +15,7 @@ function App() {
         <Route path="/case/:slug" element={<Layout />}>
           <Route index element={<Dashboard />} />
           <Route path="search" element={<Search />} />
+          <Route path="map" element={<Heatmap />} />
         </Route>
       </Routes>
     </BrowserRouter>
