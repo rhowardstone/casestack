@@ -197,14 +197,11 @@ def run_ingest(
         pdfs = sorted(case.documents_dir.rglob("*.pdf"))
         if pdfs:
             console.print(f"\n[bold]Step 1e/5: Image extraction[/bold] — {len(pdfs):,} PDFs")
-            from casestack.processors.pymupdf_extractor import PyMuPdfExtractor
             from casestack.models.forensics import ExtractedImage
 
             images_dir = settings.output_dir / "images"
             images_dir.mkdir(parents=True, exist_ok=True)
-            extractor = PyMuPdfExtractor()
             min_size = case.caption_min_image_size
-            min_bytes = 5 * 1024  # 5KB
 
             # Read OCR JSON to get doc_id for each PDF
             _pdf_doc_ids: dict[str, str] = {}
@@ -221,18 +218,16 @@ def run_ingest(
                 except Exception:
                     continue
 
-            new_count = 0
-            skipped_small = 0
-            skipped_pagescan = 0
+            # Build work items: (pdf_path, doc_id, doc_img_dir)
+            work_items = []
             for pdf_path in pdfs:
                 doc_id = _pdf_doc_ids.get(pdf_path.name) or _pdf_doc_ids.get(pdf_path.stem, pdf_path.stem)
                 doc_img_dir = images_dir / doc_id
                 # Resume: skip if already extracted
                 if doc_img_dir.exists() and any(doc_img_dir.glob("*.png")):
-                    # Reload existing images for this doc
                     for png in sorted(doc_img_dir.glob("*.png")):
-                        from PIL import Image as _PILImage
                         try:
+                            from PIL import Image as _PILImage
                             im = _PILImage.open(png)
                             w, h = im.size
                             im.close()
@@ -248,55 +243,44 @@ def run_ingest(
                             file_path=str(png),
                             size_bytes=png.stat().st_size,
                         ))
-                    continue
+                else:
+                    work_items.append((pdf_path, doc_id, doc_img_dir))
 
-                try:
-                    page_images = extractor.extract_images(pdf_path)
-                except Exception as exc:
-                    console.print(f"  [yellow]Failed to extract images from {pdf_path.name}: {exc}[/yellow]")
-                    continue
+            if work_items:
+                resumed = len(images_collected)
+                if resumed:
+                    console.print(f"  [dim]{resumed:,} images already extracted (resume)[/dim]")
 
-                if not page_images:
-                    continue
+                from concurrent.futures import ProcessPoolExecutor, as_completed
 
-                doc_img_dir.mkdir(parents=True, exist_ok=True)
-                for pi in page_images:
-                    # Filter tiny/decorative images
-                    if pi.width < min_size or pi.height < min_size:
-                        skipped_small += 1
-                        continue
-                    if len(pi.image_bytes) < min_bytes:
-                        skipped_small += 1
-                        continue
-                    # Filter full-page scans (image covers >80% of page area)
-                    if pi.page_width and pi.page_height:
-                        page_area = pi.page_width * pi.page_height
-                        img_area = pi.width * pi.height
-                        if page_area > 0 and img_area / page_area > 0.8:
-                            skipped_pagescan += 1
-                            continue
+                max_workers = min(case.ocr_workers, 8)
+                new_count = 0
+                skipped_small = 0
+                skipped_pagescan = 0
 
-                    fname = f"p{pi.page_number}_{pi.image_index}.png"
-                    img_path = doc_img_dir / fname
-                    img_path.write_bytes(pi.image_bytes)
+                with ProcessPoolExecutor(max_workers=max_workers) as pool:
+                    futures = {
+                        pool.submit(
+                            _extract_images_worker,
+                            pdf_path, doc_id, doc_img_dir, min_size,
+                        ): doc_id
+                        for pdf_path, doc_id, doc_img_dir in work_items
+                    }
+                    for future in as_completed(futures):
+                        try:
+                            result = future.result()
+                            images_collected.extend(result["images"])
+                            new_count += result["new"]
+                            skipped_small += result["skipped_small"]
+                            skipped_pagescan += result["skipped_pagescan"]
+                        except Exception:
+                            pass
 
-                    images_collected.append(ExtractedImage(
-                        document_id=doc_id,
-                        page_number=pi.page_number,
-                        image_index=pi.image_index,
-                        width=pi.width,
-                        height=pi.height,
-                        format="png",
-                        file_path=str(img_path),
-                        size_bytes=len(pi.image_bytes),
-                    ))
-                    new_count += 1
-
-            console.print(f"  [green]{new_count:,} images extracted[/green]")
-            if skipped_pagescan:
-                console.print(f"  [dim]{skipped_pagescan:,} full-page scans skipped[/dim]")
-            if skipped_small:
-                console.print(f"  [dim]{skipped_small:,} tiny/decorative images skipped[/dim]")
+                console.print(f"  [green]{new_count:,} images extracted[/green]")
+                if skipped_pagescan:
+                    console.print(f"  [dim]{skipped_pagescan:,} full-page scans skipped[/dim]")
+                if skipped_small:
+                    console.print(f"  [dim]{skipped_small:,} tiny/decorative images skipped[/dim]")
             console.print(f"  [green]Total: {len(images_collected):,} images[/green]")
         else:
             console.print("\n[dim]Step 1e/5: Image extraction — no PDFs found[/dim]")
@@ -491,6 +475,67 @@ def run_ingest(
     console.print(f"  # or: datasette serve {db_path}")
 
     return db_path
+
+
+def _extract_images_worker(
+    pdf_path: Path, doc_id: str, doc_img_dir: Path, min_size: int
+) -> dict:
+    """Worker for parallel image extraction. Runs in a subprocess."""
+    from casestack.models.forensics import ExtractedImage
+    from casestack.processors.pymupdf_extractor import PyMuPdfExtractor
+
+    min_bytes = 5 * 1024
+    extractor = PyMuPdfExtractor()
+    images: list[ExtractedImage] = []
+    new = 0
+    skipped_small = 0
+    skipped_pagescan = 0
+
+    try:
+        page_images = extractor.extract_images(pdf_path)
+    except Exception:
+        return {"images": [], "new": 0, "skipped_small": 0, "skipped_pagescan": 0}
+
+    if not page_images:
+        return {"images": [], "new": 0, "skipped_small": 0, "skipped_pagescan": 0}
+
+    doc_img_dir.mkdir(parents=True, exist_ok=True)
+    for pi in page_images:
+        if pi.width < min_size or pi.height < min_size:
+            skipped_small += 1
+            continue
+        if len(pi.image_bytes) < min_bytes:
+            skipped_small += 1
+            continue
+        if pi.page_width and pi.page_height:
+            page_area = pi.page_width * pi.page_height
+            img_area = pi.width * pi.height
+            if page_area > 0 and img_area / page_area > 0.8:
+                skipped_pagescan += 1
+                continue
+
+        fname = f"p{pi.page_number}_{pi.image_index}.png"
+        img_path = doc_img_dir / fname
+        img_path.write_bytes(pi.image_bytes)
+
+        images.append(ExtractedImage(
+            document_id=doc_id,
+            page_number=pi.page_number,
+            image_index=pi.image_index,
+            width=pi.width,
+            height=pi.height,
+            format="png",
+            file_path=str(img_path),
+            size_bytes=len(pi.image_bytes),
+        ))
+        new += 1
+
+    return {
+        "images": images,
+        "new": new,
+        "skipped_small": skipped_small,
+        "skipped_pagescan": skipped_pagescan,
+    }
 
 
 def _ingest_text_files(docs_dir: Path, ocr_dir: Path) -> None:
