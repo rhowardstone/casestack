@@ -35,6 +35,8 @@ class PageImage:
     bpc: int  # bits per component
     image_bytes: bytes = field(repr=False)
     ext: str = "png"
+    page_width: int = 0  # PDF page width in pixels (at 72 dpi)
+    page_height: int = 0  # PDF page height in pixels (at 72 dpi)
 
 
 @dataclass
@@ -120,6 +122,8 @@ class PyMuPdfExtractor:
                                 bpc=pix.n,
                                 image_bytes=pix.tobytes("png"),
                                 ext="png",
+                                page_width=int(page.rect.width),
+                                page_height=int(page.rect.height),
                             )
                         )
                     except Exception as exc:

@@ -223,6 +223,7 @@ def run_ingest(
 
             new_count = 0
             skipped_small = 0
+            skipped_pagescan = 0
             for pdf_path in pdfs:
                 doc_id = _pdf_doc_ids.get(pdf_path.name) or _pdf_doc_ids.get(pdf_path.stem, pdf_path.stem)
                 doc_img_dir = images_dir / doc_id
@@ -267,6 +268,13 @@ def run_ingest(
                     if len(pi.image_bytes) < min_bytes:
                         skipped_small += 1
                         continue
+                    # Filter full-page scans (image covers >80% of page area)
+                    if pi.page_width and pi.page_height:
+                        page_area = pi.page_width * pi.page_height
+                        img_area = pi.width * pi.height
+                        if page_area > 0 and img_area / page_area > 0.8:
+                            skipped_pagescan += 1
+                            continue
 
                     fname = f"p{pi.page_number}_{pi.image_index}.png"
                     img_path = doc_img_dir / fname
@@ -285,6 +293,8 @@ def run_ingest(
                     new_count += 1
 
             console.print(f"  [green]{new_count:,} images extracted[/green]")
+            if skipped_pagescan:
+                console.print(f"  [dim]{skipped_pagescan:,} full-page scans skipped[/dim]")
             if skipped_small:
                 console.print(f"  [dim]{skipped_small:,} tiny/decorative images skipped[/dim]")
             console.print(f"  [green]Total: {len(images_collected):,} images[/green]")
