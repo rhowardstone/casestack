@@ -15,6 +15,21 @@ dedup:
   threshold: 0.90
   bates_prefixes: ["EFTA"]
 
+captioning:
+  model: "microsoft/Florence-2-base"
+  char_threshold: 100
+
+images:
+  min_size: 50
+  min_bytes: 5120
+  page_scan_ratio: 0.8
+  analysis_model: "Qwen/Qwen2-VL-2B-Instruct"
+
+pipeline:
+  embeddings: false
+  knowledge_graph: false
+  redaction_analysis: false
+
 serve:
   port: 8001
   title: "Epstein Files — Document Search"

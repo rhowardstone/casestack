@@ -7,6 +7,16 @@ ocr:
   backend: "pymupdf"
   workers: 4
 
+images:
+  min_size: 50
+  min_bytes: 5120
+  page_scan_ratio: 0.8
+
+pipeline:
+  embeddings: false
+  knowledge_graph: false
+  redaction_analysis: false
+
 serve:
   port: 8001
   title: "Document Search"
