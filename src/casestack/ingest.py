@@ -481,6 +481,27 @@ def run_ingest(
     )
     console.print(f"  [green]Exported {len(documents)} documents, {len(all_pages)} pages -> {db_path}[/green]")
 
+    # --- Step 4b: Embeddings (optional) ---
+    if _enabled("embeddings"):
+        console.print(f"\n[bold]Step 4b: Semantic embeddings[/bold]")
+        try:
+            from casestack.processors.embeddings import EmbeddingProcessor
+
+            ep = EmbeddingProcessor(
+                settings,
+                model_name=case.embedding_model,
+                dimensions=case.embedding_dimensions,
+            )
+            ep.process_batch(documents, settings.output_dir, fmt="sqlite")
+            console.print(f"  [green]Embeddings generated for {len(documents):,} documents[/green]")
+        except ImportError:
+            console.print(
+                "  [yellow]sentence-transformers not installed — skipping."
+                " Install with: pip install 'casestack[embeddings]'[/yellow]"
+            )
+    else:
+        console.print("\n[dim]Step 4b: Embeddings — disabled[/dim]")
+
     # --- Generate Datasette config ---
     _generate_datasette_config(case, db_path)
 
