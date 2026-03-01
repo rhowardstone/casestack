@@ -126,19 +126,19 @@ def pipeline_manifest(case_path, as_json):
             console.print(f"       [dim]requires: pip install 'casestack[{step['requires_extra']}]'[/dim]")
 
 
-@cli.command()
+@cli.command("serve-datasette")
 @click.option("--case", "case_path", type=click.Path(), default=None)
 @click.option("--port", "-p", type=int, default=None)
 @click.option("--host", type=str, default="127.0.0.1")
 @click.option("--immutable", "-i", is_flag=True, help="Open database in immutable (read-only) mode")
-def serve(case_path, port, host, immutable):
+def serve_datasette(case_path, port, host, immutable):
     """Serve the case database with Datasette.
 
     \b
     Examples:
-      casestack serve
-      casestack serve --case case.yaml --port 8080
-      casestack serve --immutable
+      casestack serve-datasette
+      casestack serve-datasette --case case.yaml --port 8080
+      casestack serve-datasette --immutable
     """
     case = _load_case(case_path)
     db = case.db_path
@@ -228,6 +228,45 @@ def serve(case_path, port, host, immutable):
             console.print("  [yellow]Ask proxy starting (slow startup)[/yellow]")
 
     subprocess.run(cmd)
+
+
+@cli.command()
+@click.option("--case", "case_path", type=click.Path(), default=None)
+@click.option("--port", "-p", type=int, default=None)
+@click.option("--host", type=str, default="127.0.0.1")
+@click.option("--immutable", "-i", is_flag=True, help="Open database in immutable (read-only) mode")
+@click.pass_context
+def serve(ctx, case_path, port, host, immutable):
+    """[Deprecated] Use 'serve-datasette' instead."""
+    console.print("[yellow]Warning: 'serve' is deprecated. Use 'serve-datasette' instead.[/yellow]")
+    ctx.invoke(serve_datasette, case_path=case_path, port=port, host=host, immutable=immutable)
+
+
+@cli.command()
+@click.option("--port", "-p", default=8000, help="Port for web interface")
+@click.option("--host", default="127.0.0.1", help="Host to bind to")
+@click.option("--no-browser", is_flag=True, help="Don't open browser automatically")
+def start(port, host, no_browser):
+    """Start CaseStack web interface."""
+    try:
+        import uvicorn
+    except ImportError:
+        console.print(
+            "[red]Server dependencies not installed.[/red]\n"
+            "Install with: pip install 'casestack[server]'"
+        )
+        sys.exit(1)
+
+    from casestack.api.app import create_app
+
+    if not no_browser:
+        import threading
+        import webbrowser
+
+        threading.Timer(1.5, lambda: webbrowser.open(f"http://{host}:{port}")).start()
+
+    console.print(f"[bold]CaseStack[/bold] running at http://{host}:{port}")
+    uvicorn.run(create_app(), host=host, port=port, log_level="warning")
 
 
 @cli.command(name="ask")

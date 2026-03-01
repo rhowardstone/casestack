@@ -19,3 +19,5 @@ venv/
 .pytest_cache/
 .ruff_cache/
 .worktrees/
+node_modules/
+src/casestack/static/
