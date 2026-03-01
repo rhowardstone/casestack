@@ -26,6 +26,7 @@ def create_app() -> FastAPI:
         cases, pipeline, ingest, search,
         documents, entities, images, transcripts,
         map as map_routes,
+        ask,
     )
     app.include_router(cases.router, prefix="/api")
     app.include_router(pipeline.router, prefix="/api")
@@ -36,6 +37,7 @@ def create_app() -> FastAPI:
     app.include_router(images.router, prefix="/api")
     app.include_router(transcripts.router, prefix="/api")
     app.include_router(map_routes.router, prefix="/api")
+    app.include_router(ask.router, prefix="/api")
 
     # Serve static frontend (if built)
     import importlib.resources

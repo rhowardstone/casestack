@@ -8,6 +8,7 @@ import ImageGallery from './pages/ImageGallery'
 import Heatmap from './pages/Heatmap'
 import EntityViewer from './pages/EntityViewer'
 import TranscriptBrowser from './pages/TranscriptBrowser'
+import AskAssistant from './pages/AskAssistant'
 
 function App() {
   return (
@@ -22,6 +23,7 @@ function App() {
           <Route path="entities" element={<EntityViewer />} />
           <Route path="map" element={<Heatmap />} />
           <Route path="transcripts" element={<TranscriptBrowser />} />
+          <Route path="ask" element={<AskAssistant />} />
         </Route>
       </Routes>
     </BrowserRouter>

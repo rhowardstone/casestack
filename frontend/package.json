@@ -16,6 +16,7 @@
     "d3-force": "^3.0.0",
     "d3-selection": "^3.0.0",
     "leaflet": "^1.9.4",
+    "marked": "^17.0.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-leaflet": "^5.0.0",
