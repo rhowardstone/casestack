@@ -42,6 +42,14 @@ class Settings(BaseSettings):
     caption_char_threshold: int = 100
     caption_min_image_size: int = 50
 
+    # Image extraction / analysis
+    image_analysis_model: str = "Qwen/Qwen2-VL-2B-Instruct"
+    image_min_bytes: int = 5120
+    image_page_scan_ratio: float = 0.8
+
+    # Redaction
+    redaction_workers: int = 4
+
     # Embedding settings
     embedding_model: str = "nomic-ai/nomic-embed-text-v2-moe"
     embedding_dimensions: int = 768  # 768 full, 256 Matryoshka
@@ -78,6 +86,10 @@ class Settings(BaseSettings):
             caption_model=case.caption_model,
             caption_char_threshold=case.caption_char_threshold,
             caption_min_image_size=case.caption_min_image_size,
+            image_analysis_model=case.image_analysis_model,
+            image_min_bytes=case.image_min_bytes,
+            image_page_scan_ratio=case.image_page_scan_ratio,
+            redaction_workers=case.redaction_workers,
         )
 
     def ensure_dirs(self) -> None:
