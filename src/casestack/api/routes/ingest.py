@@ -51,8 +51,10 @@ def start_ingest(slug: str, body: IngestStartRequest | None = None):
 
     def _run():
         from casestack.ingest import run_ingest
+        from casestack.api.websocket import WebSocketCallback
+        cb = WebSocketCallback(slug)
         try:
-            run_ingest(case, skip_overrides=overrides or None)
+            run_ingest(case, skip_overrides=overrides or None, callback=cb)
             conn = state._connect()
             conn.execute(
                 "UPDATE ingest_runs SET status='completed', completed_at=? WHERE id=?",

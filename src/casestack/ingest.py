@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 import yaml
 from rich.console import Console
@@ -13,10 +14,23 @@ from casestack.config import Settings
 console = Console()
 
 
+@runtime_checkable
+class IngestCallback(Protocol):
+    """Protocol for receiving ingest progress events."""
+
+    def on_step_start(self, step_id: str, total: int) -> None: ...
+    def on_step_progress(self, step_id: str, current: int, total: int) -> None: ...
+    def on_step_complete(self, step_id: str, stats: dict) -> None: ...
+    def on_log(self, message: str, level: str) -> None: ...
+    def on_complete(self, stats: dict) -> None: ...
+    def on_error(self, step_id: str, message: str) -> None: ...
+
+
 def run_ingest(
     case: CaseConfig,
     *,
     skip_overrides: dict[str, bool] | None = None,
+    callback: IngestCallback | None = None,
 ) -> Path:
     """Run the full ingest pipeline. Returns path to output SQLite DB.
 
@@ -24,6 +38,7 @@ def run_ingest(
         case: Case configuration.
         skip_overrides: Optional dict of step_id -> enabled to override
             pipeline defaults and case.yaml settings.
+        callback: Optional callback for receiving progress events.
     """
 
     def _enabled(step_id: str) -> bool:
@@ -46,12 +61,16 @@ def run_ingest(
     console.print(f"\n[bold cyan]CaseStack[/bold cyan] — Ingesting: {case.name}")
     console.print(f"  Documents: {case.documents_dir}")
     console.print(f"  Output:    {settings.output_dir}")
+    if callback:
+        callback.on_log(f"Ingesting: {case.name}", "info")
 
     # --- Step 1: OCR ---
     if _enabled("ocr"):
         pdfs = sorted(case.documents_dir.rglob("*.pdf"))
         total_pdfs = len(pdfs)
         console.print(f"\n[bold]Step 1: OCR[/bold] — {total_pdfs:,} PDFs")
+        if callback:
+            callback.on_step_start("ocr", total_pdfs)
         if pdfs:
             from casestack.processors.ocr import OcrProcessor
 
@@ -81,12 +100,19 @@ def run_ingest(
                 del results  # Free memory between batches
             if ok:
                 console.print(f"  [green]{ok:,} newly processed[/green]")
-            console.print(f"  [green]Total: {sum(1 for _ in ocr_dir.glob('*.json')):,} documents[/green]")
+            total_docs = sum(1 for _ in ocr_dir.glob('*.json'))
+            console.print(f"  [green]Total: {total_docs:,} documents[/green]")
+            if callback:
+                callback.on_step_complete("ocr", {"processed": ok, "total": total_docs})
         else:
             console.print("  [yellow]No PDFs found, scanning for text files...[/yellow]")
             _ingest_text_files(case.documents_dir, ocr_dir)
+            if callback:
+                callback.on_step_complete("ocr", {"processed": 0, "fallback": "text_files"})
     else:
         console.print("\n[dim]Step 1: OCR — disabled[/dim]")
+        if callback:
+            callback.on_step_complete("ocr", {"skipped": True})
 
     # --- Step 1b: Transcription (audio/video) ---
     if _enabled("transcription"):
@@ -97,6 +123,8 @@ def run_ingest(
             for f in case.documents_dir.rglob("*")
             if f.suffix.lower() in MEDIA_EXTENSIONS and f.is_file()
         )
+        if callback:
+            callback.on_step_start("transcription", len(media_files) if media_files else 0)
         if media_files:
             console.print(f"\n[bold]Step 1b: Transcription[/bold] — {len(media_files):,} media files")
             try:
@@ -129,15 +157,23 @@ def run_ingest(
                         transcripts_collected.append(tr.transcript)
 
                 console.print(f"  [green]{ok:,} transcribed[/green]")
+                if callback:
+                    callback.on_step_complete("transcription", {"transcribed": ok})
             except ImportError:
                 console.print(
                     "  [yellow]faster-whisper not installed — skipping."
                     " Install with: pip install 'casestack[transcription]'[/yellow]"
                 )
+                if callback:
+                    callback.on_step_complete("transcription", {"skipped": True, "reason": "missing dependency"})
         else:
             console.print("\n[dim]Step 1b: Transcription — no media files found[/dim]")
+            if callback:
+                callback.on_step_complete("transcription", {"skipped": True, "reason": "no media files"})
     else:
         console.print("\n[dim]Step 1b: Transcription — disabled[/dim]")
+        if callback:
+            callback.on_step_complete("transcription", {"skipped": True})
 
     # --- Step 1c: Document conversion (office/text/other) ---
     if _enabled("doc_conversion"):
@@ -152,6 +188,8 @@ def run_ingest(
             and f.suffix.lower() not in _handled_extensions
             and f.is_file()
         )
+        if callback:
+            callback.on_step_start("doc_conversion", len(doc_convert_files))
         if doc_convert_files:
             console.print(
                 f"\n[bold]Step 1c: Document conversion[/bold]"
@@ -166,20 +204,30 @@ def run_ingest(
                 m_results = mp.process_batch(doc_convert_files, ocr_dir)
                 ok = sum(1 for r in m_results if r.document is not None)
                 console.print(f"  [green]{ok:,} converted[/green]")
+                if callback:
+                    callback.on_step_complete("doc_conversion", {"converted": ok})
             except ImportError:
                 console.print(
                     "  [yellow]markitdown not installed — skipping."
                     " Install with: pip install 'casestack[documents]'[/yellow]"
                 )
+                if callback:
+                    callback.on_step_complete("doc_conversion", {"skipped": True, "reason": "missing dependency"})
         else:
             console.print(
                 "\n[dim]Step 1c: Document conversion — no additional files found[/dim]"
             )
+            if callback:
+                callback.on_step_complete("doc_conversion", {"skipped": True, "reason": "no files"})
     else:
         console.print("\n[dim]Step 1c: Document conversion — disabled[/dim]")
+        if callback:
+            callback.on_step_complete("doc_conversion", {"skipped": True})
 
     # --- Step 1d: Image captioning (optional) ---
     if _enabled("page_captions"):
+        if callback:
+            callback.on_step_start("page_captions", 0)
         try:
             import torch as _torch  # noqa: F401
 
@@ -196,19 +244,29 @@ def run_ingest(
                     char_threshold=case.caption_char_threshold,
                 )
                 console.print(f"  [green]{len(captions_collected):,} page captions generated[/green]")
+                if callback:
+                    callback.on_step_complete("page_captions", {"captions": len(captions_collected)})
             else:
                 console.print("\n[dim]Step 1d: Page captions — no OCR output to scan[/dim]")
+                if callback:
+                    callback.on_step_complete("page_captions", {"skipped": True, "reason": "no OCR output"})
         except ImportError:
             console.print(
                 "\n[dim]Step 1d: Page captions — skipped"
                 " (install with: pip install 'casestack[captioning]')[/dim]"
             )
+            if callback:
+                callback.on_step_complete("page_captions", {"skipped": True, "reason": "missing dependency"})
     else:
         console.print("\n[dim]Step 1d: Page captions — disabled[/dim]")
+        if callback:
+            callback.on_step_complete("page_captions", {"skipped": True})
 
     # --- Step 1e: Image extraction from PDFs ---
     if _enabled("image_extraction"):
         pdfs = sorted(case.documents_dir.rglob("*.pdf"))
+        if callback:
+            callback.on_step_start("image_extraction", len(pdfs))
         if pdfs:
             console.print(f"\n[bold]Step 1e: Image extraction[/bold] — {len(pdfs):,} PDFs")
             from casestack.models.forensics import ExtractedImage
@@ -299,12 +357,20 @@ def run_ingest(
                 if skipped_small:
                     console.print(f"  [dim]{skipped_small:,} tiny/decorative images skipped[/dim]")
             console.print(f"  [green]Total: {len(images_collected):,} images[/green]")
+            if callback:
+                callback.on_step_complete("image_extraction", {"images": len(images_collected)})
         else:
             console.print("\n[dim]Step 1e: Image extraction — no PDFs found[/dim]")
+            if callback:
+                callback.on_step_complete("image_extraction", {"skipped": True, "reason": "no PDFs"})
     else:
         console.print("\n[dim]Step 1e: Image extraction — disabled[/dim]")
+        if callback:
+            callback.on_step_complete("image_extraction", {"skipped": True})
 
     # --- Step 1f: Image analysis (optional, requires torch) ---
+    if callback:
+        callback.on_step_start("image_analysis", len(images_collected))
     if _enabled("image_analysis") and images_collected:
         try:
             import torch as _torch  # noqa: F401
@@ -319,19 +385,29 @@ def run_ingest(
             )
             described = sum(1 for i in images_collected if i.description)
             console.print(f"  [green]{described:,} images analyzed[/green]")
+            if callback:
+                callback.on_step_complete("image_analysis", {"analyzed": described})
         except ImportError:
             console.print(
                 "\n[dim]Step 1f: Image analysis — skipped"
                 " (install with: pip install 'casestack[captioning]')[/dim]"
             )
+            if callback:
+                callback.on_step_complete("image_analysis", {"skipped": True, "reason": "missing dependency"})
     elif not _enabled("image_analysis"):
         console.print("\n[dim]Step 1f: Image analysis — disabled[/dim]")
+        if callback:
+            callback.on_step_complete("image_analysis", {"skipped": True})
     else:
         console.print("\n[dim]Step 1f: Image analysis — no extracted images[/dim]")
+        if callback:
+            callback.on_step_complete("image_analysis", {"skipped": True, "reason": "no images"})
 
     # --- Step 1g: Redaction analysis (optional) ---
     if _enabled("redaction_analysis"):
         pdfs = sorted(case.documents_dir.rglob("*.pdf"))
+        if callback:
+            callback.on_step_start("redaction_analysis", len(pdfs))
         if pdfs:
             console.print(f"\n[bold]Step 1g: Redaction analysis[/bold] — {len(pdfs):,} PDFs")
             from casestack.processors.redaction import RedactionAnalyzer
@@ -345,14 +421,22 @@ def run_ingest(
             total_redactions = sum(r.total_redactions for r in redaction_results)
             recoverable = sum(r.recoverable for r in redaction_results)
             console.print(f"  [green]{total_redactions:,} redactions found ({recoverable:,} recoverable)[/green]")
+            if callback:
+                callback.on_step_complete("redaction_analysis", {"redactions": total_redactions, "recoverable": recoverable})
         else:
             console.print("\n[dim]Step 1g: Redaction analysis — no PDFs found[/dim]")
+            if callback:
+                callback.on_step_complete("redaction_analysis", {"skipped": True, "reason": "no PDFs"})
     else:
         console.print("\n[dim]Step 1g: Redaction analysis — disabled[/dim]")
+        if callback:
+            callback.on_step_complete("redaction_analysis", {"skipped": True})
 
     # --- Step 2: Entity extraction ---
     if _enabled("entities"):
         console.print("\n[bold]Step 2: Entity extraction[/bold]")
+        if callback:
+            callback.on_step_start("entities", 0)
         json_files = sorted(ocr_dir.glob("*.json"))
         if json_files:
             from casestack.models.document import ProcessingResult
@@ -401,6 +485,8 @@ def run_ingest(
                         result.model_dump_json(indent=2), encoding="utf-8"
                     )
                 console.print(f"  [green]{count} entity links extracted[/green]")
+                if callback:
+                    callback.on_step_complete("entities", {"entity_links": count})
             else:
                 console.print(
                     "  [yellow]No person registry found — skipping entity extraction[/yellow]"
@@ -410,14 +496,22 @@ def run_ingest(
                     (entities_dir / jf.name).write_text(
                         jf.read_text(encoding="utf-8"), encoding="utf-8"
                     )
+                if callback:
+                    callback.on_step_complete("entities", {"skipped": True, "reason": "no registry"})
         else:
             console.print("  [yellow]No OCR output to extract from[/yellow]")
+            if callback:
+                callback.on_step_complete("entities", {"skipped": True, "reason": "no OCR output"})
     else:
         console.print("\n[dim]Step 2: Entities — disabled[/dim]")
+        if callback:
+            callback.on_step_complete("entities", {"skipped": True})
 
     # --- Step 3: Dedup ---
     if _enabled("dedup"):
         console.print("\n[bold]Step 3: Deduplication[/bold]")
+        if callback:
+            callback.on_step_start("dedup", 0)
         source_dir = entities_dir if list(entities_dir.glob("*.json")) else ocr_dir
         json_files = sorted(source_dir.glob("*.json"))
         if json_files:
@@ -461,12 +555,18 @@ def run_ingest(
                         f.write(",\n")
                     json.dump(p.model_dump(), f, default=str)
                 f.write("\n]\n")
+            if callback:
+                callback.on_step_complete("dedup", {"duplicate_pairs": len(pairs)})
             del pairs, records  # Free memory before SQLite export
     else:
         console.print("\n[dim]Step 3: Dedup — disabled[/dim]")
+        if callback:
+            callback.on_step_complete("dedup", {"skipped": True})
 
     # --- Step 4: SQLite export ---
     console.print("\n[bold]Step 4: SQLite export[/bold]")
+    if callback:
+        callback.on_step_start("sqlite_export", 0)
     source_dir = entities_dir if list(entities_dir.glob("*.json")) else ocr_dir
     json_files = sorted(source_dir.glob("*.json"))
 
@@ -501,10 +601,14 @@ def run_ingest(
         images=images_collected or None,
     )
     console.print(f"  [green]Exported {len(documents)} documents, {len(all_pages)} pages -> {db_path}[/green]")
+    if callback:
+        callback.on_step_complete("sqlite_export", {"documents": len(documents), "pages": len(all_pages)})
 
     # --- Step 4b: Embeddings (optional) ---
     if _enabled("embeddings"):
         console.print(f"\n[bold]Step 4b: Semantic embeddings[/bold]")
+        if callback:
+            callback.on_step_start("embeddings", len(documents))
         try:
             from casestack.processors.embeddings import EmbeddingProcessor
 
@@ -515,17 +619,25 @@ def run_ingest(
             )
             ep.process_batch(documents, settings.output_dir, fmt="sqlite")
             console.print(f"  [green]Embeddings generated for {len(documents):,} documents[/green]")
+            if callback:
+                callback.on_step_complete("embeddings", {"documents": len(documents)})
         except ImportError:
             console.print(
                 "  [yellow]sentence-transformers not installed — skipping."
                 " Install with: pip install 'casestack[embeddings]'[/yellow]"
             )
+            if callback:
+                callback.on_step_complete("embeddings", {"skipped": True, "reason": "missing dependency"})
     else:
         console.print("\n[dim]Step 4b: Embeddings — disabled[/dim]")
+        if callback:
+            callback.on_step_complete("embeddings", {"skipped": True})
 
     # --- Step 4c: Knowledge graph (optional) ---
     if _enabled("knowledge_graph"):
         console.print(f"\n[bold]Step 4c: Knowledge graph[/bold]")
+        if callback:
+            callback.on_step_start("knowledge_graph", len(documents))
         from casestack.processors.knowledge_graph import KnowledgeGraphBuilder
 
         builder = KnowledgeGraphBuilder()
@@ -535,8 +647,12 @@ def run_ingest(
         graph_dir.mkdir(parents=True, exist_ok=True)
         KnowledgeGraphBuilder.export_json(graph, graph_dir / "knowledge-graph.json")
         console.print(f"  [green]{graph.node_count} nodes, {graph.edge_count} edges[/green]")
+        if callback:
+            callback.on_step_complete("knowledge_graph", {"nodes": graph.node_count, "edges": graph.edge_count})
     else:
         console.print("\n[dim]Step 4c: Knowledge graph — disabled[/dim]")
+        if callback:
+            callback.on_step_complete("knowledge_graph", {"skipped": True})
 
     # --- Generate Datasette config ---
     _generate_datasette_config(case, db_path)
@@ -544,6 +660,9 @@ def run_ingest(
     console.print(f"\n[bold green]Done![/bold green] Serve with:")
     console.print("  casestack serve --case case.yaml")
     console.print(f"  # or: datasette serve {db_path}")
+
+    if callback:
+        callback.on_complete({"db_path": str(db_path), "documents": len(documents), "pages": len(all_pages)})
 
     return db_path
 
