@@ -67,16 +67,31 @@ class CaptionProcessor:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         dtype = torch.float16 if device == "cuda" else torch.float32
 
-        self._model = AutoModelForCausalLM.from_pretrained(
+        # Florence-2 remote code may define _supports_sdpa as a read-only
+        # property that's incompatible with newer transformers. Patch the
+        # dispatch method to gracefully handle missing/broken _supports_sdpa.
+        import transformers.modeling_utils
+
+        def _safe_sdpa_dispatch(self_inner, is_init_check=False):
+            try:
+                return self_inner._supports_sdpa
+            except (AttributeError, TypeError):
+                return False
+
+        transformers.modeling_utils.PreTrainedModel._sdpa_can_dispatch = _safe_sdpa_dispatch
+
+        model = AutoModelForCausalLM.from_pretrained(
             self._model_name,
             torch_dtype=dtype,
             trust_remote_code=True,
-        ).to(device)
+        )
+        self._model = model.to(device)
         self._processor = AutoProcessor.from_pretrained(
             self._model_name,
             trust_remote_code=True,
         )
         self._device = device
+        self._dtype = dtype
         logger.info("Florence-2 loaded on %s", device)
 
     def _run_task(self, image: "PIL.Image.Image", task: str) -> str:
@@ -84,13 +99,19 @@ class CaptionProcessor:
         import torch
 
         inputs = self._processor(text=task, images=image, return_tensors="pt")
-        inputs = {k: v.to(self._device) for k, v in inputs.items()}
+        inputs = {
+            k: v.to(device=self._device, dtype=self._dtype)
+            if v.is_floating_point()
+            else v.to(self._device)
+            for k, v in inputs.items()
+        }
 
         with torch.inference_mode():
             generated = self._model.generate(
                 **inputs,
                 max_new_tokens=512,
-                num_beams=3,
+                num_beams=1,
+                use_cache=False,
             )
 
         decoded = self._processor.batch_decode(generated, skip_special_tokens=False)[0]
@@ -154,12 +175,12 @@ class CaptionProcessor:
         captions_dir = output_dir / "captions"
         captions_dir.mkdir(parents=True, exist_ok=True)
 
-        # Resume: skip PDFs already captioned
+        # Resume: skip OCR keys already captioned
         existing = set(f.stem for f in captions_dir.glob("*.json"))
 
         # 1. Scan OCR JSON to find image-heavy pages, grouped by source PDF
-        # Structure: {pdf_stem: [(doc_id, page_num), ...]}
-        pdf_pages: dict[str, list[tuple[str, int]]] = {}
+        # Structure: {ocr_key: {"source_path": str, "pages": [(doc_id, page_num), ...]}}
+        pdf_groups: dict[str, dict] = {}
         json_files = sorted(ocr_dir.glob("*.json"))
 
         for jf in json_files:
@@ -167,20 +188,25 @@ class CaptionProcessor:
                 raw = json.loads(jf.read_text(encoding="utf-8"))
                 doc_data = raw.get("document") or raw
                 doc_id = doc_data.get("id", "")
+                source_path = raw.get("source_path", "")
                 pages_data = raw.get("pages", [])
 
                 for page in pages_data:
                     text = page.get("text_content", "")
                     page_num = page.get("page_number", 0)
                     if _is_image_heavy(text, char_threshold):
-                        # The OCR JSON stem matches the source PDF stem
-                        pdf_stem = jf.stem
-                        pdf_pages.setdefault(pdf_stem, []).append((doc_id, page_num))
+                        ocr_key = jf.stem
+                        if ocr_key not in pdf_groups:
+                            pdf_groups[ocr_key] = {
+                                "source_path": source_path,
+                                "pages": [],
+                            }
+                        pdf_groups[ocr_key]["pages"].append((doc_id, page_num))
             except Exception:
                 continue
 
-        # Filter out already-processed PDFs
-        to_process = {k: v for k, v in pdf_pages.items() if k not in existing}
+        # Filter out already-processed groups
+        to_process = {k: v for k, v in pdf_groups.items() if k not in existing}
 
         if not to_process:
             total_existing = sum(1 for _ in captions_dir.glob("*.json"))
@@ -188,7 +214,7 @@ class CaptionProcessor:
                 logger.info("Captioning resume: all %d PDFs already processed", total_existing)
             return self._load_existing_captions(captions_dir)
 
-        total_pages = sum(len(v) for v in to_process.items())
+        total_pages = sum(len(v["pages"]) for v in to_process.values())
         logger.info(
             "Captioning: %d PDFs with %d image-heavy pages (%d already done)",
             len(to_process),
@@ -210,14 +236,24 @@ class CaptionProcessor:
         with progress:
             task = progress.add_task("Captioning", total=total_pages)
 
-            for pdf_stem, page_list in to_process.items():
-                # Find the source PDF
-                pdf_path = self._find_pdf(documents_dir, pdf_stem)
-                if pdf_path is None:
-                    logger.warning("Source PDF not found for %s — skipping", pdf_stem)
+            for ocr_key, group in to_process.items():
+                source_path = group["source_path"]
+                page_list = group["pages"]
+
+                # Resolve PDF path: use source_path from OCR, fall back to search
+                pdf_path = Path(source_path) if source_path else None
+                if pdf_path is None or not pdf_path.exists():
+                    pdf_path = self._find_pdf(documents_dir, ocr_key)
+                if pdf_path is None or not pdf_path.exists():
+                    logger.warning(
+                        "Source PDF not found for %s (tried %s) — skipping",
+                        ocr_key,
+                        source_path,
+                    )
                     progress.advance(task, len(page_list))
                     continue
 
+                pdf_name = pdf_path.stem
                 pdf_captions: list[dict] = []
 
                 try:
@@ -225,7 +261,7 @@ class CaptionProcessor:
                     for doc_id, page_num in page_list:
                         progress.update(
                             task,
-                            description=f"Caption: {pdf_stem} p{page_num}",
+                            description=f"Caption: {pdf_name} p{page_num}",
                         )
 
                         try:
@@ -249,7 +285,7 @@ class CaptionProcessor:
                         except Exception as exc:
                             logger.warning(
                                 "Failed to caption %s page %d: %s",
-                                pdf_stem,
+                                pdf_name,
                                 page_num,
                                 exc,
                             )
@@ -259,12 +295,12 @@ class CaptionProcessor:
                     doc.close()
 
                 except Exception as exc:
-                    logger.warning("Failed to open PDF %s: %s", pdf_stem, exc)
+                    logger.warning("Failed to open PDF %s: %s", pdf_path, exc)
                     progress.advance(task, len(page_list))
 
                 # Save after each PDF (crash-safe)
                 if pdf_captions:
-                    out_path = captions_dir / f"{pdf_stem}.json"
+                    out_path = captions_dir / f"{ocr_key}.json"
                     out_path.write_text(
                         json.dumps(pdf_captions, indent=2, ensure_ascii=False),
                         encoding="utf-8",
