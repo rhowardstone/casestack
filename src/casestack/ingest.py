@@ -15,11 +15,21 @@ console = Console()
 
 def run_ingest(
     case: CaseConfig,
-    skip_ocr: bool = False,
-    skip_entities: bool = False,
-    skip_dedup: bool = False,
+    *,
+    skip_overrides: dict[str, bool] | None = None,
 ) -> Path:
-    """Run the full ingest pipeline. Returns path to output SQLite DB."""
+    """Run the full ingest pipeline. Returns path to output SQLite DB.
+
+    Args:
+        case: Case configuration.
+        skip_overrides: Optional dict of step_id -> enabled to override
+            pipeline defaults and case.yaml settings.
+    """
+
+    def _enabled(step_id: str) -> bool:
+        if skip_overrides and step_id in skip_overrides:
+            return skip_overrides[step_id]
+        return case.is_step_enabled(step_id)
 
     settings = Settings.from_case(case)
     settings.ensure_dirs()
@@ -38,10 +48,10 @@ def run_ingest(
     console.print(f"  Output:    {settings.output_dir}")
 
     # --- Step 1: OCR ---
-    if not skip_ocr:
+    if _enabled("ocr"):
         pdfs = sorted(case.documents_dir.rglob("*.pdf"))
         total_pdfs = len(pdfs)
-        console.print(f"\n[bold]Step 1/5: OCR[/bold] — {total_pdfs:,} PDFs")
+        console.print(f"\n[bold]Step 1: OCR[/bold] — {total_pdfs:,} PDFs")
         if pdfs:
             from casestack.processors.ocr import OcrProcessor
 
@@ -76,104 +86,108 @@ def run_ingest(
             console.print("  [yellow]No PDFs found, scanning for text files...[/yellow]")
             _ingest_text_files(case.documents_dir, ocr_dir)
     else:
-        console.print("\n[dim]Step 1/5: OCR — skipped[/dim]")
+        console.print("\n[dim]Step 1: OCR — disabled[/dim]")
 
     # --- Step 1b: Transcription (audio/video) ---
-    from casestack.processors.transcription import MEDIA_EXTENSIONS
+    if _enabled("transcription"):
+        from casestack.processors.transcription import MEDIA_EXTENSIONS
 
-    media_files = sorted(
-        f
-        for f in case.documents_dir.rglob("*")
-        if f.suffix.lower() in MEDIA_EXTENSIONS and f.is_file()
-    )
-    if media_files:
-        console.print(f"\n[bold]Step 1b/5: Transcription[/bold] — {len(media_files):,} media files")
-        try:
-            import faster_whisper as _fw  # noqa: F401
+        media_files = sorted(
+            f
+            for f in case.documents_dir.rglob("*")
+            if f.suffix.lower() in MEDIA_EXTENSIONS and f.is_file()
+        )
+        if media_files:
+            console.print(f"\n[bold]Step 1b: Transcription[/bold] — {len(media_files):,} media files")
+            try:
+                import faster_whisper as _fw  # noqa: F401
 
-            from casestack.processors.transcription import TranscriptionProcessor
+                from casestack.processors.transcription import TranscriptionProcessor
 
-            tp = TranscriptionProcessor(settings)
-            t_results = tp.process_batch(media_files, settings.output_dir)
+                tp = TranscriptionProcessor(settings)
+                t_results = tp.process_batch(media_files, settings.output_dir)
 
-            ok = 0
-            for tr in t_results:
-                if tr.document is not None:
-                    # Save as OCR-compatible JSON so entity extraction picks it up
-                    from casestack.models.document import ProcessingResult
+                ok = 0
+                for tr in t_results:
+                    if tr.document is not None:
+                        from casestack.models.document import ProcessingResult
 
-                    compat = ProcessingResult(
-                        source_path=tr.source_path,
-                        document=tr.document,
-                        pages=tr.pages,
-                        errors=tr.errors,
-                        warnings=tr.warnings,
-                        processing_time_ms=tr.processing_time_ms,
-                    )
-                    out_path = ocr_dir / f"{Path(tr.source_path).stem}.json"
-                    out_path.write_text(
-                        compat.model_dump_json(indent=2), encoding="utf-8"
-                    )
-                    ok += 1
-                if tr.transcript is not None:
-                    transcripts_collected.append(tr.transcript)
+                        compat = ProcessingResult(
+                            source_path=tr.source_path,
+                            document=tr.document,
+                            pages=tr.pages,
+                            errors=tr.errors,
+                            warnings=tr.warnings,
+                            processing_time_ms=tr.processing_time_ms,
+                        )
+                        out_path = ocr_dir / f"{Path(tr.source_path).stem}.json"
+                        out_path.write_text(
+                            compat.model_dump_json(indent=2), encoding="utf-8"
+                        )
+                        ok += 1
+                    if tr.transcript is not None:
+                        transcripts_collected.append(tr.transcript)
 
-            console.print(f"  [green]{ok:,} transcribed[/green]")
-        except ImportError:
-            console.print(
-                "  [yellow]faster-whisper not installed — skipping."
-                " Install with: pip install 'casestack[transcription]'[/yellow]"
-            )
+                console.print(f"  [green]{ok:,} transcribed[/green]")
+            except ImportError:
+                console.print(
+                    "  [yellow]faster-whisper not installed — skipping."
+                    " Install with: pip install 'casestack[transcription]'[/yellow]"
+                )
+        else:
+            console.print("\n[dim]Step 1b: Transcription — no media files found[/dim]")
     else:
-        console.print("\n[dim]Step 1b/5: Transcription — no media files found[/dim]")
+        console.print("\n[dim]Step 1b: Transcription — disabled[/dim]")
 
     # --- Step 1c: Document conversion (office/text/other) ---
-    from casestack.processors.markitdown_extractor import MARKITDOWN_EXTENSIONS
-    from casestack.processors.transcription import MEDIA_EXTENSIONS as _MEDIA_EXT
+    if _enabled("doc_conversion"):
+        from casestack.processors.markitdown_extractor import MARKITDOWN_EXTENSIONS
+        from casestack.processors.transcription import MEDIA_EXTENSIONS as _MEDIA_EXT
 
-    _handled_extensions = {".pdf"} | _MEDIA_EXT
-    doc_convert_files = sorted(
-        f
-        for f in case.documents_dir.rglob("*")
-        if f.suffix.lower() in MARKITDOWN_EXTENSIONS
-        and f.suffix.lower() not in _handled_extensions
-        and f.is_file()
-    )
-    if doc_convert_files:
-        console.print(
-            f"\n[bold]Step 1c/5: Document conversion[/bold]"
-            f" — {len(doc_convert_files):,} files"
+        _handled_extensions = {".pdf"} | _MEDIA_EXT
+        doc_convert_files = sorted(
+            f
+            for f in case.documents_dir.rglob("*")
+            if f.suffix.lower() in MARKITDOWN_EXTENSIONS
+            and f.suffix.lower() not in _handled_extensions
+            and f.is_file()
         )
-        try:
-            import markitdown as _md  # noqa: F401
-
-            from casestack.processors.markitdown_extractor import MarkitdownProcessor
-
-            mp = MarkitdownProcessor(settings)
-            m_results = mp.process_batch(doc_convert_files, ocr_dir)
-            ok = sum(1 for r in m_results if r.document is not None)
-            console.print(f"  [green]{ok:,} converted[/green]")
-        except ImportError:
+        if doc_convert_files:
             console.print(
-                "  [yellow]markitdown not installed — skipping."
-                " Install with: pip install 'casestack[documents]'[/yellow]"
+                f"\n[bold]Step 1c: Document conversion[/bold]"
+                f" — {len(doc_convert_files):,} files"
+            )
+            try:
+                import markitdown as _md  # noqa: F401
+
+                from casestack.processors.markitdown_extractor import MarkitdownProcessor
+
+                mp = MarkitdownProcessor(settings)
+                m_results = mp.process_batch(doc_convert_files, ocr_dir)
+                ok = sum(1 for r in m_results if r.document is not None)
+                console.print(f"  [green]{ok:,} converted[/green]")
+            except ImportError:
+                console.print(
+                    "  [yellow]markitdown not installed — skipping."
+                    " Install with: pip install 'casestack[documents]'[/yellow]"
+                )
+        else:
+            console.print(
+                "\n[dim]Step 1c: Document conversion — no additional files found[/dim]"
             )
     else:
-        console.print(
-            "\n[dim]Step 1c/5: Document conversion — no additional files found[/dim]"
-        )
+        console.print("\n[dim]Step 1c: Document conversion — disabled[/dim]")
 
     # --- Step 1d: Image captioning (optional) ---
-    if not skip_ocr:
+    if _enabled("page_captions"):
         try:
             import torch as _torch  # noqa: F401
 
             from casestack.processors.captioner import CaptionProcessor
 
-            # Check if there are OCR results to scan for image-heavy pages
             ocr_jsons = list(ocr_dir.glob("*.json"))
             if ocr_jsons:
-                console.print(f"\n[bold]Step 1d/5: Image captioning[/bold]")
+                console.print(f"\n[bold]Step 1d: Page captions[/bold]")
                 cp = CaptionProcessor(settings, model_name=case.caption_model)
                 captions_collected = cp.process_batch(
                     ocr_dir=ocr_dir,
@@ -183,25 +197,27 @@ def run_ingest(
                 )
                 console.print(f"  [green]{len(captions_collected):,} page captions generated[/green]")
             else:
-                console.print("\n[dim]Step 1d/5: Image captioning — no OCR output to scan[/dim]")
+                console.print("\n[dim]Step 1d: Page captions — no OCR output to scan[/dim]")
         except ImportError:
             console.print(
-                "\n[dim]Step 1d/5: Image captioning — skipped"
+                "\n[dim]Step 1d: Page captions — skipped"
                 " (install with: pip install 'casestack[captioning]')[/dim]"
             )
     else:
-        console.print("\n[dim]Step 1d/5: Image captioning — skipped (OCR skipped)[/dim]")
+        console.print("\n[dim]Step 1d: Page captions — disabled[/dim]")
 
     # --- Step 1e: Image extraction from PDFs ---
-    if not skip_ocr:
+    if _enabled("image_extraction"):
         pdfs = sorted(case.documents_dir.rglob("*.pdf"))
         if pdfs:
-            console.print(f"\n[bold]Step 1e/5: Image extraction[/bold] — {len(pdfs):,} PDFs")
+            console.print(f"\n[bold]Step 1e: Image extraction[/bold] — {len(pdfs):,} PDFs")
             from casestack.models.forensics import ExtractedImage
 
             images_dir = settings.output_dir / "images"
             images_dir.mkdir(parents=True, exist_ok=True)
             min_size = case.caption_min_image_size
+            min_bytes = case.image_min_bytes
+            page_scan_ratio = case.image_page_scan_ratio
 
             # Read OCR JSON to get doc_id for each PDF
             _pdf_doc_ids: dict[str, str] = {}
@@ -263,6 +279,7 @@ def run_ingest(
                         pool.submit(
                             _extract_images_worker,
                             pdf_path, doc_id, doc_img_dir, min_size,
+                            min_bytes, page_scan_ratio,
                         ): doc_id
                         for pdf_path, doc_id, doc_img_dir in work_items
                     }
@@ -283,24 +300,19 @@ def run_ingest(
                     console.print(f"  [dim]{skipped_small:,} tiny/decorative images skipped[/dim]")
             console.print(f"  [green]Total: {len(images_collected):,} images[/green]")
         else:
-            console.print("\n[dim]Step 1e/5: Image extraction — no PDFs found[/dim]")
+            console.print("\n[dim]Step 1e: Image extraction — no PDFs found[/dim]")
     else:
-        console.print("\n[dim]Step 1e/5: Image extraction — skipped (OCR skipped)[/dim]")
+        console.print("\n[dim]Step 1e: Image extraction — disabled[/dim]")
 
     # --- Step 1f: Image analysis (optional, requires torch) ---
-    if images_collected:
+    if _enabled("image_analysis") and images_collected:
         try:
             import torch as _torch  # noqa: F401
 
             from casestack.processors.captioner import CaptionProcessor as _CP
 
-            console.print(f"\n[bold]Step 1f/5: Image analysis[/bold] — {len(images_collected):,} images")
-            # Use Qwen2-VL for extracted images by default
-            analysis_model = case.caption_model
-            if "florence" in analysis_model.lower():
-                # Default to Qwen2-VL for image analysis even if page captioning uses Florence
-                analysis_model = "Qwen/Qwen2-VL-2B-Instruct"
-            cp = _CP(settings, model_name=analysis_model)
+            console.print(f"\n[bold]Step 1f: Image analysis[/bold] — {len(images_collected):,} images")
+            cp = _CP(settings, model_name=case.image_analysis_model)
             images_collected = cp.analyze_images(
                 images=images_collected,
                 output_dir=settings.output_dir,
@@ -309,15 +321,17 @@ def run_ingest(
             console.print(f"  [green]{described:,} images analyzed[/green]")
         except ImportError:
             console.print(
-                "\n[dim]Step 1f/5: Image analysis — skipped"
+                "\n[dim]Step 1f: Image analysis — skipped"
                 " (install with: pip install 'casestack[captioning]')[/dim]"
             )
+    elif not _enabled("image_analysis"):
+        console.print("\n[dim]Step 1f: Image analysis — disabled[/dim]")
     else:
-        console.print("\n[dim]Step 1f/5: Image analysis — no extracted images[/dim]")
+        console.print("\n[dim]Step 1f: Image analysis — no extracted images[/dim]")
 
     # --- Step 2: Entity extraction ---
-    if not skip_entities:
-        console.print("\n[bold]Step 2/5: Entity extraction[/bold]")
+    if _enabled("entities"):
+        console.print("\n[bold]Step 2: Entity extraction[/bold]")
         json_files = sorted(ocr_dir.glob("*.json"))
         if json_files:
             from casestack.models.document import ProcessingResult
@@ -378,11 +392,11 @@ def run_ingest(
         else:
             console.print("  [yellow]No OCR output to extract from[/yellow]")
     else:
-        console.print("\n[dim]Step 2/5: Entities — skipped[/dim]")
+        console.print("\n[dim]Step 2: Entities — disabled[/dim]")
 
     # --- Step 3: Dedup ---
-    if not skip_dedup:
-        console.print("\n[bold]Step 3/5: Deduplication[/bold]")
+    if _enabled("dedup"):
+        console.print("\n[bold]Step 3: Deduplication[/bold]")
         source_dir = entities_dir if list(entities_dir.glob("*.json")) else ocr_dir
         json_files = sorted(source_dir.glob("*.json"))
         if json_files:
@@ -428,10 +442,10 @@ def run_ingest(
                 f.write("\n]\n")
             del pairs, records  # Free memory before SQLite export
     else:
-        console.print("\n[dim]Step 3/5: Dedup — skipped[/dim]")
+        console.print("\n[dim]Step 3: Dedup — disabled[/dim]")
 
     # --- Step 4: SQLite export ---
-    console.print("\n[bold]Step 4/5: SQLite export[/bold]")
+    console.print("\n[bold]Step 4: SQLite export[/bold]")
     source_dir = entities_dir if list(entities_dir.glob("*.json")) else ocr_dir
     json_files = sorted(source_dir.glob("*.json"))
 
@@ -478,13 +492,17 @@ def run_ingest(
 
 
 def _extract_images_worker(
-    pdf_path: Path, doc_id: str, doc_img_dir: Path, min_size: int
+    pdf_path: Path,
+    doc_id: str,
+    doc_img_dir: Path,
+    min_size: int,
+    min_bytes: int = 5120,
+    page_scan_ratio: float = 0.8,
 ) -> dict:
     """Worker for parallel image extraction. Runs in a subprocess."""
     from casestack.models.forensics import ExtractedImage
     from casestack.processors.pymupdf_extractor import PyMuPdfExtractor
 
-    min_bytes = 5 * 1024
     extractor = PyMuPdfExtractor()
     images: list[ExtractedImage] = []
     new = 0
@@ -510,7 +528,7 @@ def _extract_images_worker(
         if pi.page_width and pi.page_height:
             page_area = pi.page_width * pi.page_height
             img_area = pi.width * pi.height
-            if page_area > 0 and img_area / page_area > 0.8:
+            if page_area > 0 and img_area / page_area > page_scan_ratio:
                 skipped_pagescan += 1
                 continue
 

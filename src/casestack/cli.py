@@ -54,10 +54,12 @@ def cli():
     default=None,
     help="Path to case.yaml (provides all config; no documents_dir or --name needed)",
 )
-@click.option("--skip-ocr", is_flag=True, help="Skip OCR step")
-@click.option("--skip-entities", is_flag=True, help="Skip entity extraction")
-@click.option("--skip-dedup", is_flag=True, help="Skip deduplication")
-def ingest(documents_dir, name, case_path, skip_ocr, skip_entities, skip_dedup):
+@click.option("--skip-ocr", is_flag=True, help="Skip OCR step (legacy, use --disable ocr)")
+@click.option("--skip-entities", is_flag=True, help="Skip entity extraction (legacy, use --disable entities)")
+@click.option("--skip-dedup", is_flag=True, help="Skip deduplication (legacy, use --disable dedup)")
+@click.option("--enable", "enable_steps", multiple=True, help="Force-enable a pipeline step (repeatable)")
+@click.option("--disable", "disable_steps", multiple=True, help="Force-disable a pipeline step (repeatable)")
+def ingest(documents_dir, name, case_path, skip_ocr, skip_entities, skip_dedup, enable_steps, disable_steps):
     """Ingest a document directory into a searchable database.
 
     \b
@@ -84,7 +86,20 @@ def ingest(documents_dir, name, case_path, skip_ocr, skip_entities, skip_dedup):
 
     from casestack.ingest import run_ingest
 
-    run_ingest(case, skip_ocr=skip_ocr, skip_entities=skip_entities, skip_dedup=skip_dedup)
+    # Build skip_overrides from legacy flags + new --enable/--disable
+    skip_overrides: dict[str, bool] = {}
+    if skip_ocr:
+        skip_overrides["ocr"] = False
+    if skip_entities:
+        skip_overrides["entities"] = False
+    if skip_dedup:
+        skip_overrides["dedup"] = False
+    for step in disable_steps:
+        skip_overrides[step] = False
+    for step in enable_steps:
+        skip_overrides[step] = True
+
+    run_ingest(case, skip_overrides=skip_overrides or None)
 
 
 @cli.command()
