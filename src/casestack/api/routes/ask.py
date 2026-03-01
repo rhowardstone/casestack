@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 from pathlib import Path
 
@@ -117,6 +118,21 @@ def _search_pages(db_path: Path, queries: list[str], max_per_query: int = 10) ->
     return results[:50]
 
 
+def _sanitize_fts5(query: str) -> str:
+    """Strip characters that cause FTS5 syntax errors."""
+    # Remove FTS5 operators and punctuation that breaks queries
+    cleaned = re.sub(r'[?!;:@#$%^&*()\[\]{}<>~/\\|`]', ' ', query)
+    # Collapse whitespace
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    # Remove common stop words to improve relevance
+    stop_words = {'who', 'what', 'where', 'when', 'why', 'how', 'is', 'are',
+                  'was', 'were', 'the', 'a', 'an', 'in', 'on', 'at', 'to',
+                  'for', 'of', 'with', 'by', 'from', 'do', 'does', 'did',
+                  'can', 'could', 'would', 'should', 'this', 'that', 'it'}
+    words = [w for w in cleaned.split() if w.lower() not in stop_words]
+    return ' '.join(words) if words else cleaned
+
+
 def _parse_queries(text: str) -> list[str]:
     """Extract a JSON array of query strings from the planner LLM response."""
     text = text.strip()
@@ -127,7 +143,7 @@ def _parse_queries(text: str) -> list[str]:
     try:
         parsed = json.loads(text)
         if isinstance(parsed, list):
-            return [str(q) for q in parsed if q]
+            return [_sanitize_fts5(str(q)) for q in parsed if q]
     except (json.JSONDecodeError, TypeError):
         pass
     return []
@@ -345,8 +361,8 @@ async def ask_endpoint(slug: str, body: AskRequest):
                 queries = []
 
             if not queries:
-                # Fallback: use raw question words
-                queries = [question]
+                # Fallback: use sanitized question words
+                queries = [_sanitize_fts5(question)]
 
             # ---- Stage 2: Search documents ----
             yield _sse("status", {"message": "Searching documents..."})

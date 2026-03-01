@@ -95,6 +95,13 @@ def ingest_status(slug: str):
         (slug,),
     ).fetchone()
     conn.close()
+
     if row:
         return dict(row)
+
+    # Check if case has existing output (e.g. ingested via CLI)
+    case_info = state.get_case(slug)
+    if case_info and case_info.get("document_count", 0) > 0:
+        return {"status": "completed", "source": "cli"}
+
     return {"status": "never_run"}

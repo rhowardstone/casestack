@@ -1,6 +1,7 @@
 """Unified search across all data types in a case."""
 from __future__ import annotations
 
+import re
 import sqlite3
 
 from fastapi import APIRouter, HTTPException, Query
@@ -14,11 +15,20 @@ router = APIRouter()
 _get_case_db = get_case_db
 
 
+def _sanitize_fts5(query: str) -> str:
+    """Strip characters that cause FTS5 syntax errors."""
+    cleaned = re.sub(r'[?!;:@#$%^&*()\[\]{}<>~/\\|`]', ' ', query)
+    return re.sub(r'\s+', ' ', cleaned).strip()
+
+
 @router.get("/cases/{slug}/search")
 def search(slug: str, q: str = Query(...), type: str = Query("all"),
            offset: int = 0, limit: int = 50):
     """Unified search across pages, transcripts, images, entities."""
     db_path = _get_case_db(slug)
+    q = _sanitize_fts5(q)
+    if not q:
+        return {"total": 0, "results": []}
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
 

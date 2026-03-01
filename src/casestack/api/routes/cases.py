@@ -31,7 +31,24 @@ class ScanRequest(BaseModel):
 
 @router.get("/cases")
 def list_cases():
-    return get_app_state().list_cases()
+    state = get_app_state()
+    cases = state.list_cases()
+    # Enrich with ingest status
+    conn = state._connect()
+    for case in cases:
+        slug = case["slug"]
+        row = conn.execute(
+            "SELECT status FROM ingest_runs WHERE case_slug = ? ORDER BY id DESC LIMIT 1",
+            (slug,),
+        ).fetchone()
+        if row:
+            case["ingest_status"] = row["status"]
+        elif case.get("document_count", 0) > 0:
+            case["ingest_status"] = "completed"
+        else:
+            case["ingest_status"] = "never_run"
+    conn.close()
+    return cases
 
 
 @router.post("/cases", status_code=201)
