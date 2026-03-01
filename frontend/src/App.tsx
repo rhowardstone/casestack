@@ -7,6 +7,7 @@ import Search from './pages/Search'
 import ImageGallery from './pages/ImageGallery'
 import Heatmap from './pages/Heatmap'
 import EntityViewer from './pages/EntityViewer'
+import TranscriptBrowser from './pages/TranscriptBrowser'
 
 function App() {
   return (
@@ -20,6 +21,7 @@ function App() {
           <Route path="images" element={<ImageGallery />} />
           <Route path="entities" element={<EntityViewer />} />
           <Route path="map" element={<Heatmap />} />
+          <Route path="transcripts" element={<TranscriptBrowser />} />
         </Route>
       </Routes>
     </BrowserRouter>
