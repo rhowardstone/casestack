@@ -102,6 +102,30 @@ def ingest(documents_dir, name, case_path, skip_ocr, skip_entities, skip_dedup, 
     run_ingest(case, skip_overrides=skip_overrides or None)
 
 
+@cli.command("pipeline-manifest")
+@click.option("--case", "case_path", type=click.Path(), default=None, help="Path to case.yaml")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON")
+def pipeline_manifest(case_path, as_json):
+    """Show available pipeline steps and their configuration."""
+    import json as _json
+
+    from casestack.pipeline import get_manifest
+
+    manifest = get_manifest()
+    if as_json:
+        click.echo(_json.dumps(manifest, indent=2))
+        return
+
+    case = _load_case(str(case_path)) if case_path else None
+    for step in manifest:
+        enabled = case.is_step_enabled(step["id"]) if case else step["default_enabled"]
+        status = "[green]ON[/green]" if enabled else "[dim]off[/dim]"
+        console.print(f"  {status}  [bold]{step['label']}[/bold] ({step['id']})")
+        console.print(f"       {step['description']}")
+        if step.get("requires_extra"):
+            console.print(f"       [dim]requires: pip install 'casestack[{step['requires_extra']}]'[/dim]")
+
+
 @cli.command()
 @click.option("--case", "case_path", type=click.Path(), default=None)
 @click.option("--port", "-p", type=int, default=None)
