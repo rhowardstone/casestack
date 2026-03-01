@@ -22,11 +22,20 @@ def create_app() -> FastAPI:
     get_app_state()
 
     # Register API routes
-    from casestack.api.routes import cases, pipeline, ingest, search
+    from casestack.api.routes import (
+        cases, pipeline, ingest, search,
+        documents, entities, images, transcripts,
+        map as map_routes,
+    )
     app.include_router(cases.router, prefix="/api")
     app.include_router(pipeline.router, prefix="/api")
     app.include_router(ingest.router, prefix="/api")
     app.include_router(search.router, prefix="/api")
+    app.include_router(documents.router, prefix="/api")
+    app.include_router(entities.router, prefix="/api")
+    app.include_router(images.router, prefix="/api")
+    app.include_router(transcripts.router, prefix="/api")
+    app.include_router(map_routes.router, prefix="/api")
 
     # Serve static frontend (if built)
     import importlib.resources

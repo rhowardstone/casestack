@@ -2,26 +2,16 @@
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 
-from casestack.api.deps import get_app_state
+from casestack.api.deps import get_case_db
 
 router = APIRouter()
 
 
-def _get_case_db(slug: str) -> Path:
-    """Find the SQLite DB for a case."""
-    state = get_app_state()
-    case = state.get_case(slug)
-    if not case:
-        raise HTTPException(404, "Case not found")
-    output_dir = Path(case["output_dir"])
-    db_path = output_dir / f"{slug}.db"
-    if not db_path.exists():
-        raise HTTPException(404, "Database not found. Run ingest first.")
-    return db_path
+# Backwards-compatible alias (in case anything imports this)
+_get_case_db = get_case_db
 
 
 @router.get("/cases/{slug}/search")
