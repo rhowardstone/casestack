@@ -4,6 +4,15 @@ Turn any document dump into a searchable evidence database.
 
 Built by the team behind [epstein-data.com](https://epstein-data.com) — where we turned the 218GB DOJ Epstein file release into a fully searchable, entity-linked, citation-backed research database.
 
+## License
+
+This project is licensed under **PolyForm Noncommercial License 1.0.0**.
+
+- Noncommercial use is allowed under the terms in [LICENSE](LICENSE).
+- Commercial use requires a separate commercial license from the project owner.
+- Required attribution notice is in [NOTICE](NOTICE).
+- Third-party dependency notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 ## Install
 
 ```bash
