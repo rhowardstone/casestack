@@ -5,7 +5,7 @@ POST /api/cases/{slug}/ask — streams a RAG-based answer as Server-Sent Events.
 SSE event types:
   - status:  progress messages (searching, generating, etc.)
   - token:   individual text tokens from the LLM
-  - done:    final event with source citations
+  - done:    final event with source citations and conversation_id
   - error:   error messages
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from casestack.api.deps import get_case_db
+from casestack.api.deps import get_app_state, get_case_db
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ class AskRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Prompts (reused from ask.py with minor tweaks)
+# Prompts
 # ---------------------------------------------------------------------------
 
 QUERY_PLANNER_PROMPT = """You are a search query planner for a document database that uses SQLite FTS5 full-text search.
@@ -51,6 +51,27 @@ FTS5 syntax:
 - Boolean: term1 AND term2, term1 OR term2
 - Prefix: bank*
 - Negation: NOT term
+
+CRITICAL RULES:
+1. Always preserve proper nouns exactly as given (person names, organization names, place names, job titles).
+   Include at least one query that searches for the person's last name or full name verbatim.
+2. Include one broad keyword query and one narrow/specific query for best recall.
+3. If the question mentions specific dates or numbers, include them in at least one query.
+4. NEVER include page numbers (e.g. "page 110"), document IDs (e.g. "EFTA00039025"), or
+   citation references in queries — the full-text index does not surface these as useful matches.
+   Search for the CONTENT being sought, not the citation pointing to it.
+5. If the question references prior conversation context ("as we discussed", "the prior answer cited",
+   "you mentioned"), extract only the underlying factual question and search for that.
+6. Keep each query SHORT — 2 to 3 key terms maximum. FTS5 treats spaces as AND operators,
+   so a 5-word query requires all 5 words on the same page, which almost always returns nothing.
+   Use multiple short queries instead of one long query.
+7. Use prefix wildcards for words that have many forms: write recommend* instead of
+   recommendation/recommend/recommended/recommends; prosecut* instead of prosecution/prosecuted;
+   disciplin* instead of discipline/disciplinary/disciplined. This dramatically improves recall.
+8. Always include at least one "minimum vocabulary" query: a single root word with a wildcard
+   that captures the core concept. For example, for a question about "OIG recommendations",
+   include "recommend*" alone or with one modifier. For "disciplinary actions", include
+   "disciplin*". This ensures broad recall even when other queries are too specific.
 
 Return ONLY a JSON array of search query strings. No explanation.
 
@@ -72,7 +93,7 @@ ANSWER_USER = """## Evidence
 
 
 # ---------------------------------------------------------------------------
-# Search helper (reused from ask.py)
+# Search helper
 # ---------------------------------------------------------------------------
 
 
@@ -118,13 +139,60 @@ def _search_pages(db_path: Path, queries: list[str], max_per_query: int = 10) ->
     return results[:50]
 
 
+def _fetch_doc_overview_pages(db_path: Path, question: str, seen: set[tuple[str, int]]) -> list[dict]:
+    """When the question references a document by title/ID, fetch its first few pages.
+
+    The FTS5 index covers page text, not document titles, so asking "what is in
+    EFTA00039421?" can't retrieve that document by name alone.  This helper
+    detects document-title patterns in the question (EFTA-style IDs) and
+    injects the document's opening pages so the LLM has representative content.
+    """
+    # Match patterns like EFTA00039421, EFTA-00039421, or similar document IDs
+    title_matches = re.findall(r'\bEFTA\d{8}\b', question, re.IGNORECASE)
+    if not title_matches:
+        return []
+
+    conn = sqlite3.connect(str(db_path))
+    extra: list[dict] = []
+    for title_id in set(t.upper() for t in title_matches):
+        rows = conn.execute(
+            """
+            SELECT d.doc_id, d.title, p.page_number, p.text_content
+            FROM documents d
+            JOIN pages p ON p.doc_id = d.doc_id
+            WHERE d.title = ?
+            ORDER BY p.page_number
+            LIMIT 5
+            """,
+            (title_id,),
+        ).fetchall()
+        for row in rows:
+            key = (row[0], row[2])
+            if key not in seen:
+                seen.add(key)
+                extra.append({
+                    "doc_id": row[0],
+                    "title": row[1],
+                    "page_number": row[2],
+                    "text": row[3][:2000],
+                    "snippet": row[3][:200],
+                })
+    conn.close()
+    return extra
+
+
 def _sanitize_fts5(query: str) -> str:
-    """Strip characters that cause FTS5 syntax errors."""
-    # Remove FTS5 operators and punctuation that breaks queries
-    cleaned = re.sub(r'[?!;:@#$%^&*()\[\]{}<>~/\\|`]', ' ', query)
-    # Collapse whitespace
+    """Strip characters that cause FTS5 syntax errors.
+
+    Preserves * only when used as a valid FTS5 prefix wildcard (immediately
+    following a word character, e.g. recommend*). All other * are stripped.
+    """
+    # Preserve prefix wildcards: word* → keep as-is
+    # Strip bare * not attached to a word
+    cleaned = re.sub(r'(\w)\*', r'\1__WILDCARD__', query)
+    cleaned = re.sub(r'[?!;:@#$%^&*()\[\]{}<>~/\\|`]', ' ', cleaned)
+    cleaned = cleaned.replace('__WILDCARD__', '*')
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    # Remove common stop words to improve relevance
     stop_words = {'who', 'what', 'where', 'when', 'why', 'how', 'is', 'are',
                   'was', 'were', 'the', 'a', 'an', 'in', 'on', 'at', 'to',
                   'for', 'of', 'with', 'by', 'from', 'do', 'does', 'did',
@@ -149,6 +217,50 @@ def _parse_queries(text: str) -> list[str]:
     return []
 
 
+# Maximum number of distinct source documents shown per answer.
+# One chip per document (lowest-page-number hit) keeps the UI readable.
+_MAX_SOURCE_DOCS = 15
+
+# Maximum number of prior Q&A turns to include in LLM context.
+# Older turns are dropped to avoid blowing up the context window on long
+# conversations.  Each "turn" = 1 user message + 1 assistant message.
+_MAX_HISTORY_TURNS = 6
+
+
+def _get_corpus_stats(db_path: Path) -> dict:
+    """Return quick corpus statistics for no-results messaging."""
+    try:
+        conn = sqlite3.connect(str(db_path))
+        doc_count = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        # Only include titles that look like real descriptions (>20 chars, not a plain ID).
+        sample_titles = [
+            row[0] for row in conn.execute(
+                "SELECT title FROM documents WHERE LENGTH(title) > 20 ORDER BY ROWID LIMIT 6"
+            ).fetchall()
+        ]
+        conn.close()
+        return {"doc_count": doc_count, "sample_titles": sample_titles}
+    except Exception:
+        return {"doc_count": 0, "sample_titles": []}
+
+
+def _dedupe_sources(results: list[dict]) -> list[dict]:
+    """Return one source entry per unique doc_id, capped at _MAX_SOURCE_DOCS.
+
+    FTS5 returns results ordered by rank (best match first). We keep the page
+    from the FIRST occurrence per document — that's the highest-ranked passage,
+    which is the most useful navigation target. Using the lowest page number
+    was wrong: it navigated to cover pages instead of the relevant content.
+    """
+    seen: dict[str, dict] = {}
+    for r in results:
+        doc_id = r["doc_id"]
+        if doc_id not in seen:
+            seen[doc_id] = {"doc_id": doc_id, "title": r["title"], "page": r["page_number"]}
+        # Do NOT update — first seen is best-ranked, keep it.
+    return list(seen.values())[:_MAX_SOURCE_DOCS]
+
+
 # ---------------------------------------------------------------------------
 # SSE helpers
 # ---------------------------------------------------------------------------
@@ -168,11 +280,13 @@ def _get_llm_config() -> dict | None:
     """Detect available LLM configuration.
 
     Checks (in order):
-      1. ANTHROPIC_API_KEY -> Anthropic Messages API (streaming)
-      2. OPENROUTER_API_KEY -> OpenRouter (OpenAI-compatible, streaming)
+      1. ANTHROPIC_API_KEY  -> Anthropic Messages API
+      2. OPENAI_API_KEY     -> OpenAI API
+      3. OPENROUTER_API_KEY -> OpenRouter (OpenAI-compatible)
+      4. OLLAMA_BASE_URL    -> Local Ollama (OpenAI-compatible)
 
     Returns dict with keys: provider, api_key, base_url, model
-    or None if no key is available.
+    or None if no provider is available.
     """
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if anthropic_key:
@@ -180,7 +294,16 @@ def _get_llm_config() -> dict | None:
             "provider": "anthropic",
             "api_key": anthropic_key,
             "base_url": "https://api.anthropic.com/v1/messages",
-            "model": "claude-sonnet-4-20250514",
+            "model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+        }
+
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    if openai_key:
+        return {
+            "provider": "openai",
+            "api_key": openai_key,
+            "base_url": "https://api.openai.com/v1/chat/completions",
+            "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
         }
 
     openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
@@ -189,7 +312,16 @@ def _get_llm_config() -> dict | None:
             "provider": "openrouter",
             "api_key": openrouter_key,
             "base_url": "https://openrouter.ai/api/v1/chat/completions",
-            "model": "google/gemini-2.5-flash-preview",
+            "model": os.environ.get("OPENROUTER_MODEL", "google/gemini-2.5-flash-preview"),
+        }
+
+    ollama_url = os.environ.get("OLLAMA_BASE_URL", "")
+    if ollama_url:
+        return {
+            "provider": "ollama",
+            "api_key": "ollama",
+            "base_url": ollama_url.rstrip("/") + "/v1/chat/completions",
+            "model": os.environ.get("OLLAMA_MODEL", "llama3.2"),
         }
 
     return None
@@ -200,8 +332,8 @@ def _get_llm_config() -> dict | None:
 # ---------------------------------------------------------------------------
 
 
-async def _stream_anthropic(config: dict, system: str, user_msg: str):
-    """Stream tokens from Anthropic Messages API."""
+async def _stream_anthropic(config: dict, system: str, messages: list[dict]):
+    """Stream tokens from Anthropic Messages API. messages is OpenAI-style."""
     async with httpx.AsyncClient() as client:
         async with client.stream(
             "POST",
@@ -216,7 +348,7 @@ async def _stream_anthropic(config: dict, system: str, user_msg: str):
                 "max_tokens": 4096,
                 "stream": True,
                 "system": system,
-                "messages": [{"role": "user", "content": user_msg}],
+                "messages": messages,
             },
             timeout=120,
         ) as resp:
@@ -231,32 +363,32 @@ async def _stream_anthropic(config: dict, system: str, user_msg: str):
                     data = json.loads(data_str)
                 except json.JSONDecodeError:
                     continue
-                event_type = data.get("type", "")
-                if event_type == "content_block_delta":
-                    delta = data.get("delta", {})
-                    text = delta.get("text", "")
+                if data.get("type") == "content_block_delta":
+                    text = data.get("delta", {}).get("text", "")
                     if text:
                         yield text
 
 
-async def _stream_openrouter(config: dict, system: str, user_msg: str):
-    """Stream tokens from OpenRouter (OpenAI-compatible)."""
-    messages = []
+async def _stream_openai_compatible(config: dict, system: str, messages: list[dict]):
+    """Stream tokens from OpenAI-compatible endpoint (OpenAI, OpenRouter, Ollama)."""
+    full_messages = []
     if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": user_msg})
+        full_messages.append({"role": "system", "content": system})
+    full_messages.extend(messages)
+
+    headers = {
+        "Authorization": f"Bearer {config['api_key']}",
+        "Content-Type": "application/json",
+    }
 
     async with httpx.AsyncClient() as client:
         async with client.stream(
             "POST",
             config["base_url"],
-            headers={
-                "Authorization": f"Bearer {config['api_key']}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
             json={
                 "model": config["model"],
-                "messages": messages,
+                "messages": full_messages,
                 "max_tokens": 4096,
                 "stream": True,
             },
@@ -275,8 +407,7 @@ async def _stream_openrouter(config: dict, system: str, user_msg: str):
                     continue
                 choices = data.get("choices", [])
                 if choices:
-                    delta = choices[0].get("delta", {})
-                    text = delta.get("content", "")
+                    text = choices[0].get("delta", {}).get("content", "")
                     if text:
                         yield text
 
@@ -300,10 +431,9 @@ async def _call_llm_non_streaming(config: dict, prompt: str) -> str:
                 timeout=60,
             )
             resp.raise_for_status()
-            data = resp.json()
-            return data["content"][0]["text"]
+            return resp.json()["content"][0]["text"]
     else:
-        # OpenRouter / OpenAI-compatible
+        # OpenAI-compatible (openai, openrouter, ollama)
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 config["base_url"],
@@ -319,8 +449,7 @@ async def _call_llm_non_streaming(config: dict, prompt: str) -> str:
                 timeout=60,
             )
             resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            return resp.json()["choices"][0]["message"]["content"]
 
 
 # ---------------------------------------------------------------------------
@@ -333,16 +462,41 @@ async def ask_endpoint(slug: str, body: AskRequest):
     """Stream a RAG-based answer as Server-Sent Events."""
     db_path = get_case_db(slug)
     question = body.question.strip()
+    app_state = get_app_state()
 
     if not question:
         async def error_stream():
             yield _sse("error", {"message": "Question cannot be empty."})
-
         return StreamingResponse(error_stream(), media_type="text/event-stream")
 
     llm_config = _get_llm_config()
 
+    # Resolve or create conversation
+    conv_id = body.conversation_id
+    if conv_id:
+        conv = app_state.get_conversation(conv_id)
+        if not conv or conv["case_slug"] != slug:
+            conv_id = None  # invalid id, start fresh
+
+    if not conv_id:
+        conv = app_state.create_conversation(slug, title=question[:60])
+        conv_id = conv["id"]
+
+    # Load existing history — cap at last _MAX_HISTORY_TURNS Q&A pairs to avoid
+    # blowing up the LLM context window on long conversations.
+    existing_messages = app_state.get_conversation_messages(conv_id)
+    # Keep only the tail of the history (most recent turns)
+    history_tail = existing_messages[-(_MAX_HISTORY_TURNS * 2):]
+    history: list[dict] = [
+        {"role": m["role"], "content": m["content"]}
+        for m in history_tail
+    ]
+
+    # Persist the user's question immediately
+    app_state.add_message(conv_id, "user", question)
+
     async def generate():
+        full_answer = ""
         try:
             # ---- Stage 1: Generate search queries ----
             yield _sse("status", {"message": "Planning search queries..."})
@@ -354,6 +508,7 @@ async def ask_endpoint(slug: str, body: AskRequest):
                         QUERY_PLANNER_PROMPT.format(question=question),
                     )
                     queries = _parse_queries(planner_response)
+                    logger.info("Query planner generated %d queries: %r", len(queries), queries)
                 except Exception as exc:
                     logger.warning("Query planner failed: %s", exc)
                     queries = []
@@ -361,34 +516,44 @@ async def ask_endpoint(slug: str, body: AskRequest):
                 queries = []
 
             if not queries:
-                # Fallback: use sanitized question words
                 queries = [_sanitize_fts5(question)]
 
             # ---- Stage 2: Search documents ----
             yield _sse("status", {"message": "Searching documents..."})
-
             results = _search_pages(db_path, queries)
+            # If question names specific documents by title, inject their opening pages
+            seen_keys: set[tuple[str, int]] = {(r["doc_id"], r["page_number"]) for r in results}
+            doc_overviews = _fetch_doc_overview_pages(db_path, question, seen_keys)
+            if doc_overviews:
+                results = doc_overviews + results
 
             if not results:
-                yield _sse("token", {"text": "No relevant documents found for this question. Try rephrasing your query or using different keywords."})
-                yield _sse("done", {"sources": []})
+                stats = _get_corpus_stats(db_path)
+                lines = ["**No matching documents found.**\n"]
+                lines.append(f"Searched {stats['doc_count']} documents using {len(queries)} quer{'y' if len(queries) == 1 else 'ies'}:")
+                for q in queries:
+                    lines.append(f"- `{q}`")
+                lines.append("\nTry rephrasing with different keywords, or use the Search page to browse all documents.")
+                no_result_msg = "\n".join(lines)
+                yield _sse("token", {"text": no_result_msg})
+                yield _sse("done", {"sources": [], "conversation_id": conv_id})
+                app_state.add_message(conv_id, "assistant", no_result_msg, sources=[])
                 return
 
             yield _sse("status", {"message": f"Found {len(results)} relevant passages. Generating answer..."})
 
             # ---- Stage 3: Synthesize answer ----
             if not llm_config:
-                # No API key: return search results as plain text
-                yield _sse("token", {"text": "**Note:** No LLM API key configured. Showing raw search results instead.\n\n"})
-                yield _sse("token", {"text": "Set `ANTHROPIC_API_KEY` or `OPENROUTER_API_KEY` environment variable to enable AI-powered answers.\n\n---\n\n"})
+                no_key_msg = "**Note:** No LLM API key configured. Set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, or `OLLAMA_BASE_URL` to enable AI answers.\n\n---\n\n"
+                yield _sse("token", {"text": no_key_msg})
+                full_answer = no_key_msg
                 for r in results[:10]:
-                    yield _sse("token", {"text": f"### {r['title']} [{r['doc_id']}, page {r['page_number']}]\n"})
-                    yield _sse("token", {"text": f"{r['snippet']}\n\n"})
-                sources = [
-                    {"doc_id": r["doc_id"], "title": r["title"], "page": r["page_number"]}
-                    for r in results[:10]
-                ]
-                yield _sse("done", {"sources": sources})
+                    chunk = f"### {r['title']} [{r['doc_id']}, page {r['page_number']}]\n{r['snippet']}\n\n"
+                    yield _sse("token", {"text": chunk})
+                    full_answer += chunk
+                sources = _dedupe_sources(results)
+                yield _sse("done", {"sources": sources, "conversation_id": conv_id})
+                app_state.add_message(conv_id, "assistant", full_answer, sources=sources)
                 return
 
             # Build evidence context
@@ -396,24 +561,24 @@ async def ask_endpoint(slug: str, body: AskRequest):
                 f"### {r['title']} [{r['doc_id']}, page {r['page_number']}]\n{r['text']}"
                 for r in results
             )
-
             user_msg = ANSWER_USER.format(evidence=evidence, question=question)
 
-            # Stream the answer
-            streamer = (
-                _stream_anthropic if llm_config["provider"] == "anthropic"
-                else _stream_openrouter
-            )
+            # Build messages array: history (without current Q, already included) + new user turn
+            messages_for_llm = history + [{"role": "user", "content": user_msg}]
 
-            async for token in streamer(llm_config, ANSWER_SYSTEM, user_msg):
+            # Stream
+            if llm_config["provider"] == "anthropic":
+                streamer = _stream_anthropic(llm_config, ANSWER_SYSTEM, messages_for_llm)
+            else:
+                streamer = _stream_openai_compatible(llm_config, ANSWER_SYSTEM, messages_for_llm)
+
+            async for token in streamer:
+                full_answer += token
                 yield _sse("token", {"text": token})
 
-            # Send sources
-            sources = [
-                {"doc_id": r["doc_id"], "title": r["title"], "page": r["page_number"]}
-                for r in results
-            ]
-            yield _sse("done", {"sources": sources})
+            sources = _dedupe_sources(results)
+            yield _sse("done", {"sources": sources, "conversation_id": conv_id})
+            app_state.add_message(conv_id, "assistant", full_answer, sources=sources)
 
         except httpx.HTTPStatusError as exc:
             logger.error("LLM API error: %s", exc)
