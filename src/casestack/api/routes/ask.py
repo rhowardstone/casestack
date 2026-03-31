@@ -72,6 +72,13 @@ CRITICAL RULES:
    that captures the core concept. For example, for a question about "OIG recommendations",
    include "recommend*" alone or with one modifier. For "disciplinary actions", include
    "disciplin*". This ensures broad recall even when other queries are too specific.
+9. When a question uses a noun derived from a verb, ALSO search the verbal form — these often
+   have different roots and wildcards won't bridge them.  Key pairs to remember:
+   - "payment" / "transfer" in the question → also search "paid" / "wire*"
+   - "testimony" → also "testif*"
+   - "arrival" / "departure" → also "arrived" / "left"
+   - "recommendation" → already covered by "recommend*"
+   Always generate at least one query that pairs the verbal form with another specific term.
 
 Return ONLY a JSON array of search query strings. No explanation.
 
@@ -79,7 +86,9 @@ User question: {question}"""
 
 ANSWER_SYSTEM = """You are a research assistant analyzing a document corpus. Answer the user's question using ONLY the evidence provided. Cite every factual claim with the document ID and page number in brackets, like [DOC-ID, page N].
 
-If the evidence doesn't contain enough information to answer, say so explicitly. Do not make claims without citations."""
+If the evidence doesn't contain enough information to answer, say so explicitly. Do not make claims without citations.
+
+IMPORTANT — numerical reasoning: When the evidence provides specific timestamps or start/end times for an event (e.g., "placed at 1:40 a.m. July 23, removed at 8:45 a.m. July 24"), COMPUTE elapsed durations from those timestamps rather than accepting a rounded summary figure from another document. Timestamps from event records are more precise than narrative summaries. If a computed duration conflicts with a stated summary, report the computed value and note the discrepancy."""
 
 ANSWER_USER = """## Evidence
 
