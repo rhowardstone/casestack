@@ -1,3 +1,4 @@
+import React from 'react'
 import { NavLink, Link } from 'react-router-dom'
 
 interface Props {
@@ -5,14 +6,35 @@ interface Props {
   caseName: string
 }
 
-const navItems = [
-  { to: '', label: 'Dashboard', icon: '\u2302' },
-  { to: '/search', label: 'Search', icon: '\u{1F50D}' },
-  { to: '/entities', label: 'Entities', icon: '\u{1F465}' },
-  { to: '/images', label: 'Images', icon: '\u{1F5BC}' },
-  { to: '/transcripts', label: 'Transcripts', icon: '\u{1F399}' },
-  { to: '/map', label: 'Map', icon: '\u{1F5FA}' },
-  { to: '/ask', label: 'Ask AI', icon: '\u2728' },
+const navItems: { to: string; label: string; icon: React.ReactNode }[] = [
+  {
+    to: '', label: 'Dashboard',
+    icon: <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{ display: 'block' }}><path d="M8.707 1.5a1 1 0 0 0-1.414 0L.646 8.146a.5.5 0 0 0 .708.708L2 8.207V13.5A1.5 1.5 0 0 0 3.5 15h2a.5.5 0 0 0 .5-.5V11h4v3.5a.5.5 0 0 0 .5.5h2a1.5 1.5 0 0 0 1.5-1.5V8.207l.646.647a.5.5 0 0 0 .708-.708L13 5.793V2.5a.5.5 0 0 0-.5-.5h-1a.5.5 0 0 0-.5.5v1.293L8.707 1.5Z"/></svg>,
+  },
+  {
+    to: '/search', label: 'Search',
+    icon: <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{ display: 'block' }}><path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001q.044.06.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1 1 0 0 0-.115-.099ZM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0Z"/></svg>,
+  },
+  {
+    to: '/entities', label: 'Entities',
+    icon: <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{ display: 'block' }}><path d="M7 14s-1 0-1-1 1-4 5-4 5 3 5 4-1 1-1 1zm4-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6m-5.784 6A2.24 2.24 0 0 1 5 13c0-1.355.68-2.75 1.936-3.72A6.3 6.3 0 0 0 5 9c-4 0-5 3-5 4s1 1 1 1zM4.5 8a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5"/></svg>,
+  },
+  {
+    to: '/images', label: 'Images',
+    icon: <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{ display: 'block' }}><path d="M6.002 5.5a1.5 1.5 0 1 1-3 0 1.5 1.5 0 0 1 3 0"/><path d="M1.5 2A1.5 1.5 0 0 0 0 3.5v9A1.5 1.5 0 0 0 1.5 14h13a1.5 1.5 0 0 0 1.5-1.5v-9A1.5 1.5 0 0 0 14.5 2zm13 1a.5.5 0 0 1 .5.5v6l-3.775-1.947a.5.5 0 0 0-.577.093l-3.71 3.71-2.66-1.772a.5.5 0 0 0-.63.062L1.002 12v.54L1 12.5v-9a.5.5 0 0 1 .5-.5z"/></svg>,
+  },
+  {
+    to: '/transcripts', label: 'Transcripts',
+    icon: <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{ display: 'block' }}><path d="M5 3a3 3 0 0 1 6 0v5a3 3 0 0 1-6 0z"/><path d="M3.5 6.5A.5.5 0 0 1 4 7v1a4 4 0 0 0 8 0V7a.5.5 0 0 1 1 0v1a5 5 0 0 1-4.5 4.975V15h3a.5.5 0 0 1 0 1h-7a.5.5 0 0 1 0-1h3v-2.025A5 5 0 0 1 3 8V7a.5.5 0 0 1 .5-.5"/></svg>,
+  },
+  {
+    to: '/map', label: 'Map',
+    icon: <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{ display: 'block' }}><path d="M8 16s6-5.686 6-10A6 6 0 0 0 2 6c0 4.314 6 10 6 10m0-7a3 3 0 1 1 0-6 3 3 0 0 1 0 6"/></svg>,
+  },
+  {
+    to: '/ask', label: 'Ask AI',
+    icon: <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style={{ display: 'block' }}><path d="M16 8c0 3.866-3.582 7-8 7a9 9 0 0 1-2.347-.306c-.584.297-1.925.864-4.181 1.234-.2.032-.352-.176-.273-.362.354-.836.674-1.95.77-2.966C.744 11.37 0 9.76 0 8c0-3.866 3.582-7 8-7s8 3.134 8 7M5 8a1 1 0 1 0-2 0 1 1 0 0 0 2 0m4 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0m3 0a1 1 0 1 0-2 0 1 1 0 0 0 2 0"/></svg>,
+  },
 ]
 
 export default function Sidebar({ slug, caseName }: Props) {
@@ -122,9 +144,11 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
   },
   navIcon: {
-    fontSize: 16,
     width: 20,
-    textAlign: 'center' as const,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   bottomNav: {
     padding: '8px 8px 16px',
