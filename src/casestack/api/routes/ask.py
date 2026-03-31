@@ -391,20 +391,35 @@ def _cap_evidence_per_doc(results: list[dict]) -> list[dict]:
     most ``_MAX_PAGES_PER_DOC_IN_EVIDENCE`` pages per document while
     preserving the overall RRF rank order.
 
-    Exception: if all results come from a single document, the cap is NOT
-    applied — the user's question is document-scoped (e.g., "list all 8 OIG
-    recommendations") and we should return as many relevant pages as possible.
+    Exception: if one document accounts for ≥70% of the results, the question
+    is document-scoped (e.g., "list all 8 OIG recommendations") and we should
+    not cap that document.  The cap still applies to the minor documents to
+    prevent a long tail of off-topic pages from one secondary source.
     """
-    unique_docs = {r["doc_id"] for r in results}
-    if len(unique_docs) <= 1:
-        return results  # single-document result set: no cap
+    if not results:
+        return results
 
+    # Count pages per document
     counts: dict[str, int] = {}
+    for r in results:
+        counts[r["doc_id"]] = counts.get(r["doc_id"], 0) + 1
+
+    # If one document dominates (≥70%), treat it as document-scoped
+    dominant_doc: str | None = None
+    for doc_id, count in counts.items():
+        if count / len(results) >= 0.70:
+            dominant_doc = doc_id
+            break
+
+    seen: dict[str, int] = {}
     capped: list[dict] = []
     for r in results:
         doc_id = r["doc_id"]
-        counts[doc_id] = counts.get(doc_id, 0) + 1
-        if counts[doc_id] <= _MAX_PAGES_PER_DOC_IN_EVIDENCE:
+        seen[doc_id] = seen.get(doc_id, 0) + 1
+        # Dominant document is never capped; all others are.
+        if dominant_doc is not None and doc_id == dominant_doc:
+            capped.append(r)
+        elif seen[doc_id] <= _MAX_PAGES_PER_DOC_IN_EVIDENCE:
             capped.append(r)
     return capped
 

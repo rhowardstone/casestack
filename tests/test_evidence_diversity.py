@@ -39,15 +39,17 @@ class TestCapEvidencePerDoc:
         assert len(out) == 3  # 3 ≤ _MAX_PAGES_PER_DOC_IN_EVIDENCE (4)
 
     def test_multi_doc_exceeds_limit(self):
-        """One large document is capped when other documents are also present."""
-        results = _make_results([("OIG", i) for i in range(15)] + [("FD302", 0)])
+        """One large document is capped when documents share results roughly equally."""
+        # 10 OIG + 5 FD302 = 10/15 = 67% < 70%, so OIG is NOT dominant → capped
+        results = _make_results([("OIG", i) for i in range(10)] + [("FD302", i) for i in range(5)])
         out = _cap_evidence_per_doc(results)
         oig_pages = [r for r in out if r["doc_id"] == "OIG"]
         assert len(oig_pages) == _MAX_PAGES_PER_DOC_IN_EVIDENCE
 
     def test_rank_order_preserved(self):
-        """Best-ranked pages (first in list) are kept, not last (multi-doc case)."""
-        results = _make_results([("OIG", i) for i in range(10)] + [("FD302", 0)])
+        """Best-ranked pages (first in list) are kept, not last (non-dominant multi-doc)."""
+        # 8 OIG + 4 FD302 = 8/12 = 67% < 70% → OIG capped
+        results = _make_results([("OIG", i) for i in range(8)] + [("FD302", i) for i in range(4)])
         out = _cap_evidence_per_doc(results)
         oig_pages = [r for r in out if r["doc_id"] == "OIG"]
         kept_pages = [r["page_number"] for r in oig_pages]
@@ -96,18 +98,45 @@ class TestCapEvidencePerDoc:
         assert "FD302" in doc_ids, "Small document must not be crowded out by large document"
 
     def test_single_document_no_cap(self):
-        """When all results are from one document, the cap is not applied.
-
-        Example: 'list all 8 OIG recommendations' returns only OIG pages;
-        capping to 4 would hide 4 recommendations.
-        """
+        """When all results are from one document, the cap is not applied."""
         results = _make_results([("OIG", i) for i in range(12)])
         out = _cap_evidence_per_doc(results)
         assert len(out) == 12, "Single-document result set must not be capped"
 
+    def test_dominant_document_70pct_no_cap(self):
+        """When one document has ≥70% of results, it is not capped.
+
+        Example: OIG recommendations query returns 17 OIG + 1 policy page.
+        The OIG is dominant (94%) and must NOT be capped to 4 pages.
+        """
+        results = _make_results([("OIG", i) for i in range(17)] + [("POLICY", 0)])
+        out = _cap_evidence_per_doc(results)
+        oig = [r for r in out if r["doc_id"] == "OIG"]
+        assert len(oig) == 17, "Dominant document (≥70%) must not be capped"
+
+    def test_dominant_doc_secondary_still_capped(self):
+        """Minor documents are still capped even when a dominant doc is present."""
+        # OIG dominates, but secondary doc has many pages
+        results = _make_results(
+            [("OIG", i) for i in range(15)] + [("SECONDARY", i) for i in range(8)]
+        )
+        out = _cap_evidence_per_doc(results)
+        secondary = [r for r in out if r["doc_id"] == "SECONDARY"]
+        assert len(secondary) == _MAX_PAGES_PER_DOC_IN_EVIDENCE
+
+    def test_no_dominant_applies_cap_to_all(self):
+        """When no document has ≥70%, cap is applied to all."""
+        # 50/50 split — neither dominates
+        results = _make_results([("OIG", i) for i in range(10)] + [("FD302", i) for i in range(10)])
+        out = _cap_evidence_per_doc(results)
+        oig = [r for r in out if r["doc_id"] == "OIG"]
+        fd = [r for r in out if r["doc_id"] == "FD302"]
+        assert len(oig) == _MAX_PAGES_PER_DOC_IN_EVIDENCE
+        assert len(fd) == _MAX_PAGES_PER_DOC_IN_EVIDENCE
+
     def test_two_documents_applies_cap(self):
-        """With two documents, the per-doc cap is applied normally."""
-        results = _make_results([("OIG", i) for i in range(10)] + [("FD302", i) for i in range(2)])
+        """With two roughly equal documents, the per-doc cap is applied."""
+        results = _make_results([("OIG", i) for i in range(10)] + [("FD302", i) for i in range(10)])
         out = _cap_evidence_per_doc(results)
         oig = [r for r in out if r["doc_id"] == "OIG"]
         assert len(oig) == _MAX_PAGES_PER_DOC_IN_EVIDENCE
