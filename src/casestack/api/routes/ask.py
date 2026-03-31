@@ -304,6 +304,12 @@ def _parse_queries(text: str) -> list[str]:
 # One chip per document (lowest-page-number hit) keeps the UI readable.
 _MAX_SOURCE_DOCS = 15
 
+# Maximum pages from a single document included in the LLM evidence context.
+# Without this cap, a large corpus document (e.g., the OIG report) can match
+# many queries and fill all evidence slots, crowding out relevant pages from
+# smaller documents like FBI FD-302 interview transcripts.
+_MAX_PAGES_PER_DOC_IN_EVIDENCE = 4
+
 # Maximum number of prior Q&A turns to include in LLM context verbatim.
 # Older turns are compacted (not dropped) into a structured summary block
 # that is prepended to the recent history, preserving investigative context.
@@ -374,6 +380,25 @@ def _dedupe_sources(results: list[dict]) -> list[dict]:
             seen[doc_id] = {"doc_id": doc_id, "title": r["title"], "page": r["page_number"]}
         # Do NOT update — first seen is best-ranked, keep it.
     return list(seen.values())[:_MAX_SOURCE_DOCS]
+
+
+def _cap_evidence_per_doc(results: list[dict]) -> list[dict]:
+    """Limit pages from any single document in the evidence context.
+
+    When many queries match the same large document (e.g., a 128-page OIG
+    report), that document can crowd out all evidence slots and prevent the
+    LLM from seeing relevant pages from smaller documents.  This keeps at
+    most ``_MAX_PAGES_PER_DOC_IN_EVIDENCE`` pages per document while
+    preserving the overall RRF rank order.
+    """
+    counts: dict[str, int] = {}
+    capped: list[dict] = []
+    for r in results:
+        doc_id = r["doc_id"]
+        counts[doc_id] = counts.get(doc_id, 0) + 1
+        if counts[doc_id] <= _MAX_PAGES_PER_DOC_IN_EVIDENCE:
+            capped.append(r)
+    return capped
 
 
 # ---------------------------------------------------------------------------
@@ -789,6 +814,12 @@ async def ask_endpoint(slug: str, body: AskRequest):
                         QUERY_PLANNER_PROMPT.format(question=question),
                     )
                     queries = _parse_queries(planner_response)
+                    # Enforce the 2-5 query limit from Rule 6 server-side.
+                    # When the planner over-generates (7+ queries), many come from the same
+                    # document, drowning out diverse sources via RRF score accumulation.
+                    if len(queries) > 5:
+                        logger.debug("Query planner returned %d queries; capping to 5", len(queries))
+                        queries = queries[:5]
                     logger.info("Query planner generated %d queries: %r", len(queries), queries)
                 except Exception as exc:
                     logger.warning("Query planner failed: %s", exc)
@@ -847,10 +878,12 @@ async def ask_endpoint(slug: str, body: AskRequest):
                 app_state.add_message(conv_id, "assistant", full_answer, sources=sources)
                 return
 
-            # Build evidence context
+            # Build evidence context — cap pages per document to prevent a single
+            # large document from crowding out relevant pages from other sources.
+            evidence_results = _cap_evidence_per_doc(results)
             evidence = "\n\n".join(
                 f"### {r['title']} [{r['doc_id']}, page {r['page_number']}]\n{r['text']}"
-                for r in results
+                for r in evidence_results
             )
             user_msg = ANSWER_USER.format(evidence=evidence, question=question)
 
