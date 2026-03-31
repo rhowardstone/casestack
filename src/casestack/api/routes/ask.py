@@ -218,8 +218,66 @@ def _search_pages(db_path: Path, queries: list[str], max_per_query: int = 10) ->
             continue
 
     _add_adjacent_context(conn, results)
+
+    # For small documents (≤5 pages total), inject all sibling pages when any
+    # page matches.  Short documents like government letters and indictments
+    # contain evidence spread across all pages; retrieving only the page whose
+    # heading matches misses the rest of the document.
+    _inject_small_doc_siblings(conn, results, seen)
+
     conn.close()
     return results[:50]
+
+
+_SMALL_DOC_MAX_PAGES = 5  # document is "small" if it has at most this many pages
+
+
+def _inject_small_doc_siblings(
+    conn: sqlite3.Connection,
+    results: list[dict],
+    seen: set[tuple[str, int]],
+) -> None:
+    """Append missing pages from small documents already present in results.
+
+    When a query matches page 1 of a 3-page government letter, pages 2-3 may
+    not rank high enough to appear individually.  For documents with
+    ≤_SMALL_DOC_MAX_PAGES pages we fetch all siblings so the LLM sees the
+    complete document.
+    """
+    # Find which small documents are present in results
+    doc_ids = {r["doc_id"] for r in results}
+    if not doc_ids:
+        return
+
+    placeholders = ",".join("?" * len(doc_ids))
+    rows = conn.execute(
+        f"""
+        SELECT d.doc_id, d.title, COUNT(p.id) AS page_count
+        FROM documents d
+        JOIN pages p ON p.doc_id = d.doc_id
+        WHERE d.doc_id IN ({placeholders})
+        GROUP BY d.doc_id
+        HAVING page_count <= {_SMALL_DOC_MAX_PAGES}
+        """,
+        list(doc_ids),
+    ).fetchall()
+
+    for doc_id, title, _page_count in rows:
+        sibling_rows = conn.execute(
+            "SELECT page_number, text_content FROM pages WHERE doc_id = ? ORDER BY page_number",
+            (doc_id,),
+        ).fetchall()
+        for page_number, text_content in sibling_rows:
+            key = (doc_id, page_number)
+            if key not in seen:
+                seen.add(key)
+                results.append({
+                    "doc_id": doc_id,
+                    "title": title,
+                    "page_number": page_number,
+                    "text": text_content[:2000],
+                    "snippet": text_content[:200],
+                })
 
 
 def _fetch_doc_overview_pages(db_path: Path, question: str, seen: set[tuple[str, int]]) -> list[dict]:
