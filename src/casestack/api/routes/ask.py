@@ -57,6 +57,9 @@ CRITICAL RULES:
    Include at least one query that searches for the person's last name or full name verbatim.
 2. Include one broad keyword query and one narrow/specific query for best recall.
 3. If the question mentions specific dates or numbers, include them in at least one query.
+   NEVER invent or guess a date or year that does not appear verbatim in the user's question.
+   For example, if the question asks "when did X happen?" with no year, do NOT add a year guess
+   like "2019" or "2024" to the query — this restricts recall to one year and may miss results.
 4. NEVER include page numbers (e.g. "page 110"), document IDs (e.g. "EFTA00039025"), or
    citation references in queries — the full-text index does not surface these as useful matches.
    Search for the CONTENT being sought, not the citation pointing to it.

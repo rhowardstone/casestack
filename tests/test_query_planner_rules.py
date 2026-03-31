@@ -57,6 +57,10 @@ class TestQueryPlannerRules:
         assert "deferred prosecution" in QUERY_PLANNER_PROMPT
         assert "indictment" in QUERY_PLANNER_PROMPT
 
+    def test_rule_no_invented_dates(self):
+        """Rule 3 extension: must not invent dates/years not in the question."""
+        assert "NEVER invent" in QUERY_PLANNER_PROMPT or "not appear verbatim" in QUERY_PLANNER_PROMPT
+
 
 class TestAnswerSystemNumericalReasoning:
     """Verify ANSWER_SYSTEM instructs LLM to compute from timestamps."""
