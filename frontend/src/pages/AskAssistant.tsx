@@ -218,42 +218,56 @@ export default function AskAssistant() {
 
   return (
     <div style={styles.root}>
-      {/* Sidebar */}
-      {sidebarOpen && (
-        <div style={styles.sidebar}>
-          <div style={styles.sidebarHeader}>
-            <button style={styles.newChatBtn} onClick={startNewChat}>
-              + New chat
+      {/* Sidebar — full (240px) or collapsed icon-strip (48px) */}
+      <div style={sidebarOpen ? styles.sidebar : styles.sidebarCollapsed}>
+        {sidebarOpen ? (
+          <>
+            <div style={styles.sidebarHeader}>
+              <button style={styles.newChatBtn} onClick={startNewChat}>
+                + New chat
+              </button>
+            </div>
+            <div style={styles.convList}>
+              {conversations.length === 0 && (
+                <div style={styles.convEmpty}>No conversations yet</div>
+              )}
+              {conversations.map(conv => (
+                <div
+                  key={conv.id}
+                  style={{
+                    ...styles.convItem,
+                    ...(conv.id === activeConvId ? styles.convItemActive : {}),
+                  }}
+                  onClick={() => switchConversation(conv.id)}
+                >
+                  <span style={styles.convTitle}>
+                    {conv.title || 'Untitled'}
+                  </span>
+                  <button
+                    style={styles.convDelete}
+                    onClick={e => handleDeleteConversation(conv.id, e)}
+                    title="Delete"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <div style={styles.sidebarIconStrip}>
+            <button
+              style={styles.iconStripNewChat}
+              onClick={startNewChat}
+              title="New chat"
+            >
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
+              </svg>
             </button>
           </div>
-          <div style={styles.convList}>
-            {conversations.length === 0 && (
-              <div style={styles.convEmpty}>No conversations yet</div>
-            )}
-            {conversations.map(conv => (
-              <div
-                key={conv.id}
-                style={{
-                  ...styles.convItem,
-                  ...(conv.id === activeConvId ? styles.convItemActive : {}),
-                }}
-                onClick={() => switchConversation(conv.id)}
-              >
-                <span style={styles.convTitle}>
-                  {conv.title || 'Untitled'}
-                </span>
-                <button
-                  style={styles.convDelete}
-                  onClick={e => handleDeleteConversation(conv.id, e)}
-                  title="Delete"
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Main chat area */}
       <div style={styles.main}>
@@ -448,6 +462,33 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     background: 'var(--surface)',
     overflow: 'hidden',
+  },
+  sidebarCollapsed: {
+    width: 48,
+    minWidth: 48,
+    borderRight: '1px solid var(--border)',
+    display: 'flex',
+    flexDirection: 'column' as const,
+    background: 'var(--surface)',
+    overflow: 'hidden',
+  },
+  sidebarIconStrip: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    alignItems: 'center',
+    padding: '12px 0',
+    gap: 8,
+  },
+  iconStripNewChat: {
+    background: 'none',
+    border: '1px solid var(--border)',
+    borderRadius: 6,
+    padding: '6px',
+    cursor: 'pointer',
+    color: 'var(--text-muted)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   sidebarHeader: {
     padding: '12px 12px 8px',
@@ -669,19 +710,15 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#fff',
   },
 
-  // Document viewer panel — fixed right overlay, main column offsets via marginRight
+  // Document viewer panel — flex sibling of main, pushes chat area left when open
   viewerPanel: {
-    position: 'fixed' as const,
-    right: 0,
-    top: 0,
-    bottom: 0,
     width: 460,
-    background: 'var(--surface)',
+    minWidth: 460,
     borderLeft: '1px solid var(--border)',
+    background: 'var(--surface)',
     display: 'flex',
     flexDirection: 'column' as const,
-    zIndex: 100,
-    boxShadow: '-4px 0 20px rgba(0,0,0,0.10)',
+    overflow: 'hidden',
   },
   viewerHeader: {
     display: 'flex',
