@@ -63,6 +63,9 @@ CRITICAL RULES:
 4. NEVER include page numbers (e.g. "page 110"), document IDs (e.g. "EFTA00039025"), or
    citation references in queries — the full-text index does not surface these as useful matches.
    Search for the CONTENT being sought, not the citation pointing to it.
+   Also NEVER use the FTS5 NOT operator (e.g. "rounds NOT signed") — FTS5 NOT means
+   "exclude pages containing this word", which is almost always wrong. Use positive search
+   terms only: "unsigned rounds" or "missed rounds" instead of "rounds NOT signed".
 5. If the question references prior conversation context ("as we discussed", "the prior answer cited",
    "you mentioned"), extract only the underlying factual question and search for that.
 6. Keep each query SHORT — 2 to 3 key terms maximum. FTS5 treats spaces as AND operators,

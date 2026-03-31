@@ -28,6 +28,10 @@ class TestQueryPlannerRules:
         """Rule 4: no page numbers or document IDs in queries."""
         assert "EFTA" in QUERY_PLANNER_PROMPT  # example of what NOT to include
 
+    def test_rule_no_not_operator(self):
+        """Rule 4 extension: FTS5 NOT operator must not be used (almost always wrong)."""
+        assert "NOT operator" in QUERY_PLANNER_PROMPT or "NEVER use the FTS5 NOT" in QUERY_PLANNER_PROMPT
+
     def test_rule_minimum_vocabulary_query(self):
         """Rule 8: always include a single-root minimum vocab query."""
         assert "minimum vocabulary" in QUERY_PLANNER_PROMPT or "minimum" in QUERY_PLANNER_PROMPT
