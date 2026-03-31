@@ -351,6 +351,164 @@ def _dedupe_sources(results: list[dict]) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Hybrid search: semantic (vector) + FTS5 merged via Reciprocal Rank Fusion
+# ---------------------------------------------------------------------------
+
+# Module-level caches so the model and embeddings are loaded once per process.
+_st_model = None  # sentence-transformers model instance
+_emb_cache: dict[str, tuple[list[tuple[int, str, int]], "object"]] = {}  # db_path → (meta, matrix)
+
+
+def _get_st_model():
+    """Lazy-load the sentence-transformers model (cached after first call)."""
+    global _st_model
+    if _st_model is not None:
+        return _st_model
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError:
+        return None
+    model_name = os.environ.get(
+        "CASESTACK_EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+    )
+    logger.info("Loading sentence-transformers model: %s", model_name)
+    _st_model = SentenceTransformer(model_name, trust_remote_code=True)
+    return _st_model
+
+
+def _load_page_embeddings(db_path: Path):
+    """Load page embeddings from DB into a numpy matrix (cached per db_path).
+
+    Returns (page_meta, matrix) where page_meta is a list of
+    (page_id, doc_id, page_number) tuples and matrix is shape (N, dims).
+    Returns None if page_embeddings table is empty or numpy unavailable.
+    """
+    cache_key = str(db_path)
+    if cache_key in _emb_cache:
+        return _emb_cache[cache_key]
+
+    try:
+        import numpy as np
+        import struct
+    except ImportError:
+        return None
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        rows = conn.execute(
+            "SELECT pe.page_id, p.doc_id, p.page_number, pe.dims, pe.embedding "
+            "FROM page_embeddings pe JOIN pages p ON pe.page_id = p.id"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        # Table doesn't exist yet
+        conn.close()
+        return None
+    conn.close()
+
+    if not rows:
+        return None
+
+    dims = rows[0][3]
+    page_meta = [(r[0], r[1], r[2]) for r in rows]
+    matrix = np.array(
+        [np.frombuffer(r[4], dtype=np.float32) for r in rows],
+        dtype=np.float32,
+    )
+    if matrix.shape[1] != dims:
+        logger.warning("Embedding dims mismatch: expected %d got %d", dims, matrix.shape[1])
+        return None
+
+    result = (page_meta, matrix)
+    _emb_cache[cache_key] = result
+    logger.info("Loaded %d page embeddings (%d dims) from %s", len(rows), dims, db_path.name)
+    return result
+
+
+def _search_semantic(db_path: Path, query: str, top_k: int = 20) -> list[dict]:
+    """Semantic similarity search over stored page embeddings.
+
+    Returns results in the same dict format as _search_pages().
+    Returns an empty list when embeddings are unavailable (graceful fallback).
+    """
+    loaded = _load_page_embeddings(db_path)
+    if loaded is None:
+        return []
+
+    model = _get_st_model()
+    if model is None:
+        return []
+
+    try:
+        import numpy as np
+    except ImportError:
+        return []
+
+    page_meta, matrix = loaded
+
+    query_emb = model.encode([query], normalize_embeddings=True)[0].astype(np.float32)
+    scores = matrix @ query_emb  # cosine sim (vectors already normalized)
+
+    top_indices = np.argsort(scores)[::-1][:top_k]
+
+    conn = sqlite3.connect(str(db_path))
+    results: list[dict] = []
+    for idx in top_indices:
+        sim = float(scores[idx])
+        if sim < 0.25:  # minimum semantic similarity threshold
+            break
+        page_id, doc_id, page_number = page_meta[idx]
+        row = conn.execute(
+            "SELECT p.text_content, d.title "
+            "FROM pages p JOIN documents d ON p.document_id = d.id "
+            "WHERE p.id = ?",
+            (page_id,),
+        ).fetchone()
+        if row:
+            text, title = row
+            results.append({
+                "doc_id": doc_id,
+                "page_number": page_number,
+                "text": text,
+                "snippet": text[:200],
+                "title": title or doc_id,
+                "score": sim,
+            })
+    if results:
+        adj_conn = sqlite3.connect(str(db_path))
+        _add_adjacent_context(adj_conn, results)
+        adj_conn.close()
+    return results
+
+
+def _rrf_merge(
+    fts_results: list[dict],
+    sem_results: list[dict],
+    k: int = 60,
+) -> list[dict]:
+    """Reciprocal Rank Fusion of FTS5 and semantic search results.
+
+    RRF score = Σ 1/(k + rank_i).  Results that appear in both lists get
+    a score boost.  Preserves page text from whichever source ranked it first.
+    """
+    scores: dict[tuple[str, int], float] = {}
+    data: dict[tuple[str, int], dict] = {}
+
+    for rank, r in enumerate(fts_results):
+        key = (r["doc_id"], r["page_number"])
+        scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank + 1)
+        data[key] = r
+
+    for rank, r in enumerate(sem_results):
+        key = (r["doc_id"], r["page_number"])
+        scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank + 1)
+        if key not in data:
+            data[key] = r
+
+    merged_keys = sorted(scores, key=lambda x: scores[x], reverse=True)
+    return [data[k] for k in merged_keys]
+
+
+# ---------------------------------------------------------------------------
 # SSE helpers
 # ---------------------------------------------------------------------------
 
@@ -617,7 +775,17 @@ async def ask_endpoint(slug: str, body: AskRequest):
 
             # ---- Stage 2: Search documents ----
             yield _sse("status", {"message": "Searching documents..."})
-            results = _search_pages(db_path, queries)
+            fts_results = _search_pages(db_path, queries)
+            sem_results = _search_semantic(db_path, question)
+            if sem_results:
+                results = _rrf_merge(fts_results, sem_results)
+                logger.info(
+                    "Hybrid search: %d FTS5 + %d semantic → %d merged",
+                    len(fts_results), len(sem_results), len(results),
+                )
+            else:
+                results = fts_results
+
             # If question names specific documents by title, inject their opening pages
             seen_keys: set[tuple[str, int]] = {(r["doc_id"], r["page_number"]) for r in results}
             doc_overviews = _fetch_doc_overview_pages(db_path, question, seen_keys)

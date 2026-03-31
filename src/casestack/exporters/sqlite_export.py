@@ -129,6 +129,16 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     UNIQUE(document_id, chunk_index)
 );
 
+-- Page-level vector embeddings for hybrid FTS5 + semantic search.
+-- One row per page; embedding is a packed F32 BLOB (little-endian IEEE 754).
+-- Populated by the 'reembed' pipeline step; absent rows fall back to FTS5.
+CREATE TABLE IF NOT EXISTS page_embeddings (
+    page_id   INTEGER PRIMARY KEY REFERENCES pages(id),
+    model     TEXT NOT NULL,
+    dims      INTEGER NOT NULL,
+    embedding BLOB NOT NULL
+);
+
 -- FTS5 on pages (THE critical feature)
 CREATE VIRTUAL TABLE IF NOT EXISTS pages_fts USING fts5(
     text_content,
