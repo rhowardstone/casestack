@@ -138,6 +138,73 @@ def ingest_status(slug: str):
 
 
 _reembed_status: dict[str, dict] = {}
+_dc_fetch_status: dict[str, dict] = {}
+
+
+class DocumentCloudFetchRequest(BaseModel):
+    project_url: str  # DC project URL, slug, or numeric ID
+    fetch_annotations: bool = False
+    max_docs: int | None = None  # limit for testing; None = all
+
+
+@router.post("/cases/{slug}/documentcloud/fetch")
+def fetch_documentcloud(slug: str, body: DocumentCloudFetchRequest):
+    """Download PDFs from a DocumentCloud project into the case documents_dir.
+
+    Runs in the background.  Check status with
+    GET /cases/{slug}/documentcloud/fetch/status.
+
+    The downloaded PDFs are placed in the case's documents_dir; run
+    POST /cases/{slug}/ingest/start afterwards to index them.
+    """
+    import threading
+    from casestack.api.deps import get_app_state
+
+    state = get_app_state()
+    case_info = state.get_case(slug)
+    if not case_info:
+        raise HTTPException(404, "Case not found")
+
+    if _dc_fetch_status.get(slug, {}).get("status") == "running":
+        raise HTTPException(409, "DocumentCloud fetch already running for this case")
+
+    from pathlib import Path as _Path
+    from casestack.case import CaseConfig as _CaseConfig
+
+    case = _CaseConfig.from_yaml(_Path(case_info["case_yaml_path"]))
+
+    def _run():
+        _dc_fetch_status[slug] = {"status": "running"}
+        try:
+            from casestack.processors.documentcloud_fetcher import DocumentCloudFetcher
+            fetcher = DocumentCloudFetcher()
+            results = fetcher.fetch_project(
+                body.project_url,
+                case.documents_dir,
+                fetch_annotations=body.fetch_annotations,
+                max_docs=body.max_docs,
+            )
+            downloaded = sum(1 for r in results if r["status"] == "downloaded")
+            skipped = sum(1 for r in results if r["status"] == "skipped")
+            failed = sum(1 for r in results if r["status"] == "failed")
+            _dc_fetch_status[slug] = {
+                "status": "completed",
+                "downloaded": downloaded,
+                "skipped": skipped,
+                "failed": failed,
+                "total": len(results),
+            }
+        except Exception as exc:
+            _dc_fetch_status[slug] = {"status": "failed", "error": str(exc)}
+
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "started", "project_url": body.project_url}
+
+
+@router.get("/cases/{slug}/documentcloud/fetch/status")
+def documentcloud_fetch_status(slug: str):
+    """Get DocumentCloud fetch status."""
+    return _dc_fetch_status.get(slug, {"status": "never_run"})
 
 
 @router.post("/cases/{slug}/reembed")
