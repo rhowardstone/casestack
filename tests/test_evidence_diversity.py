@@ -38,17 +38,19 @@ class TestCapEvidencePerDoc:
         out = _cap_evidence_per_doc(results)
         assert len(out) == 3  # 3 ≤ _MAX_PAGES_PER_DOC_IN_EVIDENCE (4)
 
-    def test_single_doc_exceeds_limit(self):
-        """One large document should be capped."""
-        results = _make_results([("OIG", i) for i in range(15)])
+    def test_multi_doc_exceeds_limit(self):
+        """One large document is capped when other documents are also present."""
+        results = _make_results([("OIG", i) for i in range(15)] + [("FD302", 0)])
         out = _cap_evidence_per_doc(results)
-        assert len(out) == _MAX_PAGES_PER_DOC_IN_EVIDENCE
+        oig_pages = [r for r in out if r["doc_id"] == "OIG"]
+        assert len(oig_pages) == _MAX_PAGES_PER_DOC_IN_EVIDENCE
 
     def test_rank_order_preserved(self):
-        """Best-ranked pages (first in list) are kept, not last."""
-        results = _make_results([("OIG", i) for i in range(10)])
+        """Best-ranked pages (first in list) are kept, not last (multi-doc case)."""
+        results = _make_results([("OIG", i) for i in range(10)] + [("FD302", 0)])
         out = _cap_evidence_per_doc(results)
-        kept_pages = [r["page_number"] for r in out]
+        oig_pages = [r for r in out if r["doc_id"] == "OIG"]
+        kept_pages = [r["page_number"] for r in oig_pages]
         assert kept_pages == list(range(_MAX_PAGES_PER_DOC_IN_EVIDENCE))
 
     def test_multiple_docs_each_capped(self):
@@ -92,3 +94,20 @@ class TestCapEvidencePerDoc:
         out = _cap_evidence_per_doc(results)
         doc_ids = {r["doc_id"] for r in out}
         assert "FD302" in doc_ids, "Small document must not be crowded out by large document"
+
+    def test_single_document_no_cap(self):
+        """When all results are from one document, the cap is not applied.
+
+        Example: 'list all 8 OIG recommendations' returns only OIG pages;
+        capping to 4 would hide 4 recommendations.
+        """
+        results = _make_results([("OIG", i) for i in range(12)])
+        out = _cap_evidence_per_doc(results)
+        assert len(out) == 12, "Single-document result set must not be capped"
+
+    def test_two_documents_applies_cap(self):
+        """With two documents, the per-doc cap is applied normally."""
+        results = _make_results([("OIG", i) for i in range(10)] + [("FD302", i) for i in range(2)])
+        out = _cap_evidence_per_doc(results)
+        oig = [r for r in out if r["doc_id"] == "OIG"]
+        assert len(oig) == _MAX_PAGES_PER_DOC_IN_EVIDENCE

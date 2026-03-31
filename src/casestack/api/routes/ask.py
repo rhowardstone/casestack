@@ -390,7 +390,15 @@ def _cap_evidence_per_doc(results: list[dict]) -> list[dict]:
     LLM from seeing relevant pages from smaller documents.  This keeps at
     most ``_MAX_PAGES_PER_DOC_IN_EVIDENCE`` pages per document while
     preserving the overall RRF rank order.
+
+    Exception: if all results come from a single document, the cap is NOT
+    applied — the user's question is document-scoped (e.g., "list all 8 OIG
+    recommendations") and we should return as many relevant pages as possible.
     """
+    unique_docs = {r["doc_id"] for r in results}
+    if len(unique_docs) <= 1:
+        return results  # single-document result set: no cap
+
     counts: dict[str, int] = {}
     capped: list[dict] = []
     for r in results:
