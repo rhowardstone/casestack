@@ -95,12 +95,15 @@ CRITICAL RULES:
     generate SHORT standalone queries (WITHOUT the person's name/title) using concrete action
     verbs that appear in interview transcripts and FD-302 reports. FBI interview transcripts use
     pronouns ("he gathered", "she located") not job titles, so a query like "Captain gather*"
-    will MISS those pages. Instead generate the verb phrase alone:
-    - "What did the Captain do on the morning of August 10?" → also search "gathered records",
-      "locate* file", "signed logbook"  (NO "Captain" in these queries)
-    - "What evidence did investigators collect?" → also search "collected evidence", "seize*"
+    will MISS those pages. Instead generate the verb phrase alone — EXACTLY 2 TERMS:
+    - "What did the Captain do on the morning of August 10?" → "gathered records",
+      "locat* file", "signed logbook"  (NO "Captain"; each query is 2 terms max)
+    - "What evidence did investigators collect?" → "collected evidence", "seize*"
+    - "Captain collected belongings" → "gathered records" (NOT "gathered collected Epstein
+      belongings morning" — that is 5 terms and returns nothing)
     Common action-verb fragments for investigative reports: gather*, collect*, seize*, locat*,
     retrieve*, inspect*, review*, signed logbook, gathered records.
+    CRITICAL: these Rule 11 queries must be 2 terms only. No person names, no dates.
 
 12. For questions about legal outcomes, charges, or prosecutions, use the vocabulary of legal
     documents rather than plain English paraphrases:
@@ -265,7 +268,7 @@ def _search_pages(db_path: Path, queries: list[str], max_per_query: int = 10) ->
     return results[:50]
 
 
-_SMALL_DOC_MAX_PAGES = 5  # document is "small" if it has at most this many pages
+_SMALL_DOC_MAX_PAGES = 6  # document is "small" if it has at most this many pages
 
 
 def _inject_small_doc_siblings(

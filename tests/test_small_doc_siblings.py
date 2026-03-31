@@ -113,3 +113,14 @@ class TestInjectSmallDocSiblings:
         _inject_small_doc_siblings(conn, results, seen)
         assert ("DOC", 2) in seen
         assert ("DOC", 3) in seen
+
+    def test_six_page_doc_expanded(self):
+        """Regression: 6-page FD-302 interview (e.g. Captain's August 10 interview) must be
+        fully expanded.  Threshold raised from 5 to 6 after p5 of EFTA00039972 (containing
+        'gathered records' / 'could not locate inmate file') was missed when p4 matched."""
+        page_texts = [f"text {i}" for i in range(_SMALL_DOC_MAX_PAGES)]
+        conn = _make_db({"FD302": page_texts})
+        results = [self._result("FD302", 1)]
+        seen = {("FD302", 1)}
+        _inject_small_doc_siblings(conn, results, seen)
+        assert len(results) == _SMALL_DOC_MAX_PAGES
