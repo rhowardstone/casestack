@@ -71,6 +71,12 @@ class TestQueryPlannerRules:
         assert "missing" in QUERY_PLANNER_PROMPT
         assert "signatures missing" in QUERY_PLANNER_PROMPT or "missing sign" in QUERY_PLANNER_PROMPT
 
+    def test_rule_no_clock_times_in_queries(self):
+        """Rule 14: clock times (6:45pm, 10:30pm) must never appear in FTS5 queries."""
+        # FTS5 tokenizes ':' as separator — "6:45pm" → tokens "6","45pm", matches nothing
+        assert "NEVER include clock times" in QUERY_PLANNER_PROMPT or "clock time" in QUERY_PLANNER_PROMPT.lower()
+        assert "6:45" in QUERY_PLANNER_PROMPT  # example of what NOT to include
+
 
 class TestAnswerSystemNumericalReasoning:
     """Verify ANSWER_SYSTEM instructs LLM to compute from timestamps."""

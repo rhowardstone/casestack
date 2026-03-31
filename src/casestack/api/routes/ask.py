@@ -44,7 +44,7 @@ class AskRequest(BaseModel):
 
 QUERY_PLANNER_PROMPT = """You are a search query planner for a document database that uses SQLite FTS5 full-text search.
 
-Given a user question, generate 2-5 FTS5 search queries that would find relevant documents.
+Given a user question, generate EXACTLY 2-5 FTS5 search queries (no more than 5) that would find relevant documents.
 
 FTS5 syntax:
 - Quoted phrases: "wire transfer"
@@ -120,6 +120,16 @@ CRITICAL RULES:
     - "failed to sign rounds" → search "missing sign*" or "signatures missing"
     - "skipped inmate counts" → search "count* missing" or "missing count*"
     - "unsigned log entries" → search "missing sign*" or "log* missing"
+
+14. NEVER include clock times (e.g. "6:45pm", "10:30pm", "18:53") in FTS5 queries.
+    Clock times appear in many different formats in documents ("6:45 p.m.", "18:53:54",
+    "6:58 PM", "approximately 7:00 PM") and FTS5 tokenizes colons as separators — so
+    "6:45pm" becomes tokens "6" and "45pm", which match nothing useful.  A query like
+    "August 9 6 45pm" will return 0 results.
+    Instead, search for the EVENTS or PEOPLE involved at those times:
+    - "What happened at 6:45pm on August 9?" → search "Epstein phone call August 9"
+    - "Who was in the SHU at 10:30pm?" → search "SHU 10 pm count" or "Noel Thomas August 9"
+    Use time information only as context for framing event-based queries.
 
 Return ONLY a JSON array of search query strings. No explanation.
 
@@ -910,12 +920,15 @@ async def ask_endpoint(slug: str, body: AskRequest):
                         QUERY_PLANNER_PROMPT.format(question=question),
                     )
                     queries = _parse_queries(planner_response)
-                    # Enforce the 2-5 query limit from Rule 6 server-side.
-                    # When the planner over-generates (7+ queries), many come from the same
-                    # document, drowning out diverse sources via RRF score accumulation.
-                    if len(queries) > 5:
-                        logger.debug("Query planner returned %d queries; capping to 5", len(queries))
-                        queries = queries[:5]
+                    # Enforce a server-side query cap.  The planner is instructed to
+                    # generate 2-5 queries but occasionally over-produces.  Cap at 7:
+                    # _cap_evidence_per_doc handles document diversity, so the old
+                    # tight cap of 5 is no longer needed for diversity reasons.
+                    # Allowing up to 7 ensures high-quality queries at positions 6-7
+                    # (e.g. "staff discovered cellmate missing") are not dropped.
+                    if len(queries) > 7:
+                        logger.debug("Query planner returned %d queries; capping to 7", len(queries))
+                        queries = queries[:7]
                     logger.info("Query planner generated %d queries: %r", len(queries), queries)
                 except Exception as exc:
                     logger.warning("Query planner failed: %s", exc)
