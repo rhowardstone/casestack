@@ -94,6 +94,15 @@ CRITICAL RULES:
     Common action-verb fragments for investigative reports: gather*, collect*, seize*, locat*,
     retrieve*, inspect*, review*, signed logbook, gathered records.
 
+12. For questions about legal outcomes, charges, or prosecutions, use the vocabulary of legal
+    documents rather than plain English paraphrases:
+    - "charged" / "indicted" / "indictment" — not "referred for criminal prosecution"
+    - "nolle prosequi" — for dismissed cases
+    - "deferred prosecution" — for DPA outcomes
+    - "declined" — when prosecutors chose not to charge ("prosecution was declined")
+    - "plea" / "pled guilty" — not "agreed to plead"
+    Legal documents use precise terminology; plain-English paraphrases may not appear at all.
+
 Return ONLY a JSON array of search query strings. No explanation.
 
 User question: {question}"""

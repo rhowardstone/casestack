@@ -51,6 +51,12 @@ class TestQueryPlannerRules:
         assert "gather" in QUERY_PLANNER_PROMPT
         assert "locat" in QUERY_PLANNER_PROMPT
 
+    def test_rule_legal_vocabulary(self):
+        """Rule 12: use legal document vocabulary for charges/prosecution questions."""
+        assert "nolle prosequi" in QUERY_PLANNER_PROMPT
+        assert "deferred prosecution" in QUERY_PLANNER_PROMPT
+        assert "indictment" in QUERY_PLANNER_PROMPT
+
 
 class TestAnswerSystemNumericalReasoning:
     """Verify ANSWER_SYSTEM instructs LLM to compute from timestamps."""
