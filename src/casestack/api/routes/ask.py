@@ -97,6 +97,53 @@ ANSWER_USER = """## Evidence
 # ---------------------------------------------------------------------------
 
 
+def _add_adjacent_context(
+    conn: sqlite3.Connection,
+    results: list[dict],
+    context_chars: int = 300,
+) -> None:
+    """Mutate each result to include tail/head text from adjacent pages.
+
+    PDF page boundaries often split sentences mid-way.  For example, a page
+    may start with "...notified by the Captain" where the first part of that
+    sentence is on the previous page.  Without context, the LLM sees a
+    garbled fragment.
+
+    This fetches up to ``context_chars`` characters from the end of the
+    previous page and the start of the next page for each result, prepending /
+    appending them so the LLM has complete sentence context across boundaries.
+    """
+    for r in results:
+        doc_id = r["doc_id"]
+        page_num = r["page_number"]
+
+        rows = conn.execute(
+            """
+            SELECT page_number, text_content FROM pages
+            WHERE doc_id = ? AND page_number IN (?, ?)
+            ORDER BY page_number
+            """,
+            (doc_id, page_num - 1, page_num + 1),
+        ).fetchall()
+
+        prev_tail = ""
+        next_head = ""
+        for row in rows:
+            if row[0] == page_num - 1:
+                prev_tail = row[1][-context_chars:].strip()
+            elif row[0] == page_num + 1:
+                next_head = row[1][:context_chars].strip()
+
+        if prev_tail or next_head:
+            parts = []
+            if prev_tail:
+                parts.append(f"[...]{prev_tail}")
+            parts.append(r["text"])
+            if next_head:
+                parts.append(f"{next_head}[...]")
+            r["text"] = "\n".join(parts)
+
+
 def _search_pages(db_path: Path, queries: list[str], max_per_query: int = 10) -> list[dict]:
     """Run FTS5 queries and return deduplicated page results."""
     conn = sqlite3.connect(str(db_path))
@@ -135,6 +182,7 @@ def _search_pages(db_path: Path, queries: list[str], max_per_query: int = 10) ->
             logger.debug("FTS5 query failed: %r -- %s", query, exc)
             continue
 
+    _add_adjacent_context(conn, results)
     conn.close()
     return results[:50]
 
