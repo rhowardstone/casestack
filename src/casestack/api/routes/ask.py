@@ -71,6 +71,8 @@ CRITICAL RULES:
 6. Keep each query SHORT — 2 to 3 key terms maximum. FTS5 treats spaces as AND operators,
    so a 5-word query requires all 5 words on the same page, which almost always returns nothing.
    Use multiple short queries instead of one long query.
+   BAD (returns 0 results): "Epstein attorney visits suicide watch approval"
+   GOOD (returns results): "Captain approv* visit*" and "suicide watch visit*"
 7. Use prefix wildcards for words that have many forms: write recommend* instead of
    recommendation/recommend/recommended/recommends; prosecut* instead of prosecution/prosecuted;
    disciplin* instead of discipline/disciplinary/disciplined. This dramatically improves recall.
@@ -130,6 +132,15 @@ CRITICAL RULES:
     - "What happened at 6:45pm on August 9?" → search "Epstein phone call August 9"
     - "Who was in the SHU at 10:30pm?" → search "SHU 10 pm count" or "Noel Thomas August 9"
     Use time information only as context for framing event-based queries.
+
+15. BOP and prison documents use institutional vocabulary that differs from everyday English:
+    - "attorney visits" / "lawyer meetings" → use "legal visit*" (BOP term is "legal visits")
+    - "jail" / "prison" → use "SHU", "MCC", "BOP" (specific institutional terms rank better)
+    - "guards" / "officers" → use "correctional officer*" or "CO" or staff role names
+    - "suicide attempt" → use "suicide watch", "suicidal ideation", "self-harm" (clinical terms)
+    - "mental health check" → use "psychological observation" or "psych* observation"
+    - "daily check-in" → use "round*" or "count*" (BOP accountability terms)
+    Always prefer the institutional/clinical term over the everyday English equivalent.
 
 Return ONLY a JSON array of search query strings. No explanation.
 

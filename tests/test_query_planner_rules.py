@@ -77,6 +77,11 @@ class TestQueryPlannerRules:
         assert "NEVER include clock times" in QUERY_PLANNER_PROMPT or "clock time" in QUERY_PLANNER_PROMPT.lower()
         assert "6:45" in QUERY_PLANNER_PROMPT  # example of what NOT to include
 
+    def test_rule_bop_vocabulary(self):
+        """Rule 15: use BOP institutional vocabulary — 'legal visit*' not 'attorney visits'."""
+        assert "legal visit" in QUERY_PLANNER_PROMPT
+        assert "psychological observation" in QUERY_PLANNER_PROMPT
+
 
 class TestAnswerSystemNumericalReasoning:
     """Verify ANSWER_SYSTEM instructs LLM to compute from timestamps."""
