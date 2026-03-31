@@ -65,6 +65,12 @@ class TestQueryPlannerRules:
         """Rule 3 extension: must not invent dates/years not in the question."""
         assert "NEVER invent" in QUERY_PLANNER_PROMPT or "not appear verbatim" in QUERY_PLANNER_PROMPT
 
+    def test_rule_compliance_failure_vocabulary(self):
+        """Rule 13: compliance failures are described as 'missing' in govt docs, not 'unsigned/failed'."""
+        # Corpus says "16 of 16 instances were missing" — not "failed to sign" or "unsigned"
+        assert "missing" in QUERY_PLANNER_PROMPT
+        assert "signatures missing" in QUERY_PLANNER_PROMPT or "missing sign" in QUERY_PLANNER_PROMPT
+
 
 class TestAnswerSystemNumericalReasoning:
     """Verify ANSWER_SYSTEM instructs LLM to compute from timestamps."""

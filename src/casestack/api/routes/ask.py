@@ -109,6 +109,18 @@ CRITICAL RULES:
     - "plea" / "pled guilty" — not "agreed to plead"
     Legal documents use precise terminology; plain-English paraphrases may not appear at all.
 
+13. For questions about missed/skipped/unsigned compliance actions (rounds, signatures, log entries,
+    counts), government documents describe the ABSENCE using bureaucratic language — NOT plain English
+    like "failed to sign" or "unsigned". The corpus will say things like:
+    - "instances were missing" (not "failed to sign")
+    - "signatures were missing" (not "unsigned entries")
+    - "not completed" / "not conducted" (not "skipped")
+    - "absent" / "no entry" (not "omitted")
+    Key implication: always include "missing" as a search term paired with the noun:
+    - "failed to sign rounds" → search "missing sign*" or "signatures missing"
+    - "skipped inmate counts" → search "count* missing" or "missing count*"
+    - "unsigned log entries" → search "missing sign*" or "log* missing"
+
 Return ONLY a JSON array of search query strings. No explanation.
 
 User question: {question}"""
