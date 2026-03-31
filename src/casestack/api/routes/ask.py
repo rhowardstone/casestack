@@ -269,10 +269,42 @@ def _parse_queries(text: str) -> list[str]:
 # One chip per document (lowest-page-number hit) keeps the UI readable.
 _MAX_SOURCE_DOCS = 15
 
-# Maximum number of prior Q&A turns to include in LLM context.
-# Older turns are dropped to avoid blowing up the context window on long
-# conversations.  Each "turn" = 1 user message + 1 assistant message.
+# Maximum number of prior Q&A turns to include in LLM context verbatim.
+# Older turns are compacted (not dropped) into a structured summary block
+# that is prepended to the recent history, preserving investigative context.
+# Each "turn" = 1 user message + 1 assistant message.
 _MAX_HISTORY_TURNS = 6
+
+# Max chars of each answer to include in the compacted summary.
+_COMPACT_ANSWER_CHARS = 400
+
+
+def _compact_history_turns(dropped: list[dict]) -> tuple[dict, dict]:
+    """Compact dropped Q&A turns into a synthetic user/assistant message pair.
+
+    Returns a (user_msg, assistant_ack) tuple to prepend to recent history so
+    the LLM retains prior investigative findings without verbatim token cost.
+    """
+    lines = ["[Prior investigation context — earlier conversation turns condensed]\n"]
+    i = 0
+    while i < len(dropped) - 1:
+        if dropped[i]["role"] == "user" and dropped[i + 1]["role"] == "assistant":
+            q = dropped[i]["content"][:150].strip()
+            a = dropped[i + 1]["content"]
+            a_trimmed = a[:_COMPACT_ANSWER_CHARS].strip()
+            if len(a) > _COMPACT_ANSWER_CHARS:
+                a_trimmed += "..."
+            lines.append(f"Q: {q}")
+            lines.append(f"A: {a_trimmed}\n")
+            i += 2
+        else:
+            i += 1
+    user_msg = {"role": "user", "content": "\n".join(lines)}
+    assistant_ack = {
+        "role": "assistant",
+        "content": "Understood. I have the prior investigation context from earlier in this conversation.",
+    }
+    return user_msg, assistant_ack
 
 
 def _get_corpus_stats(db_path: Path) -> dict:
@@ -530,15 +562,23 @@ async def ask_endpoint(slug: str, body: AskRequest):
         conv = app_state.create_conversation(slug, title=question[:60])
         conv_id = conv["id"]
 
-    # Load existing history — cap at last _MAX_HISTORY_TURNS Q&A pairs to avoid
-    # blowing up the LLM context window on long conversations.
+    # Load existing history.  If the conversation is long, compact older turns
+    # into a structured summary block rather than silently discarding them —
+    # this preserves investigative findings across context boundaries.
     existing_messages = app_state.get_conversation_messages(conv_id)
-    # Keep only the tail of the history (most recent turns)
-    history_tail = existing_messages[-(_MAX_HISTORY_TURNS * 2):]
-    history: list[dict] = [
-        {"role": m["role"], "content": m["content"]}
-        for m in history_tail
-    ]
+    max_verbatim = _MAX_HISTORY_TURNS * 2
+    if len(existing_messages) > max_verbatim:
+        dropped = existing_messages[:-max_verbatim]
+        recent = existing_messages[-max_verbatim:]
+        user_ctx, asst_ack = _compact_history_turns(dropped)
+        history: list[dict] = [user_ctx, asst_ack] + [
+            {"role": m["role"], "content": m["content"]} for m in recent
+        ]
+    else:
+        history = [
+            {"role": m["role"], "content": m["content"]}
+            for m in existing_messages
+        ]
 
     # Persist the user's question immediately
     app_state.add_message(conv_id, "user", question)
