@@ -40,6 +40,17 @@ class TestQueryPlannerRules:
         """Rule 6: spaces are AND operators — multiple short queries beat one long query."""
         assert "AND" in QUERY_PLANNER_PROMPT  # explanation of AND semantics
 
+    def test_rule_comma_numeric_amounts(self):
+        """Rule 10: FTS5 splits on commas — search '250' not '250,000'."""
+        # Must warn about comma-splitting and give guidance on numeric queries
+        assert "250" in QUERY_PLANNER_PROMPT or "comma" in QUERY_PLANNER_PROMPT.lower()
+        assert "FAIL" in QUERY_PLANNER_PROMPT or "splits" in QUERY_PLANNER_PROMPT.lower()
+
+    def test_rule_action_verb_queries(self):
+        """Rule 11: for 'what did X do' questions, also search action verbs like gather*, locat*."""
+        assert "gather" in QUERY_PLANNER_PROMPT
+        assert "locat" in QUERY_PLANNER_PROMPT
+
 
 class TestAnswerSystemNumericalReasoning:
     """Verify ANSWER_SYSTEM instructs LLM to compute from timestamps."""

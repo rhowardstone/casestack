@@ -79,6 +79,16 @@ CRITICAL RULES:
    - "arrival" / "departure" → also "arrived" / "left"
    - "recommendation" → already covered by "recommend*"
    Always generate at least one query that pairs the verbal form with another specific term.
+10. For dollar amounts with commas (e.g., "$250,000"), FTS5 SPLITS on punctuation so "250,000"
+    becomes tokens "250" and "000" — searching "250,000" or "250000" will FAIL. Instead search
+    just the distinctive digits: "paid 250" or "250 Individual". Never include the comma in a
+    numeric query.
+11. For questions asking what someone DID (actions, activities performed by a person), ALSO
+    generate queries with concrete action verbs that appear in interview transcripts and reports:
+    gather*, collect*, seize*, locat*, retrieve*, inspect*, review*. For example:
+    - "What did the Captain do on the morning of August 10?" → also search "gathered records" or
+      "Captain locat*"
+    - "What evidence did investigators collect?" → also search "collected evidence" or "seize*"
 
 Return ONLY a JSON array of search query strings. No explanation.
 
