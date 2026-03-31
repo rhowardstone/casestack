@@ -84,11 +84,15 @@ CRITICAL RULES:
     just the distinctive digits: "paid 250" or "250 Individual". Never include the comma in a
     numeric query.
 11. For questions asking what someone DID (actions, activities performed by a person), ALSO
-    generate queries with concrete action verbs that appear in interview transcripts and reports:
-    gather*, collect*, seize*, locat*, retrieve*, inspect*, review*. For example:
-    - "What did the Captain do on the morning of August 10?" → also search "gathered records" or
-      "Captain locat*"
-    - "What evidence did investigators collect?" → also search "collected evidence" or "seize*"
+    generate SHORT standalone queries (WITHOUT the person's name/title) using concrete action
+    verbs that appear in interview transcripts and FD-302 reports. FBI interview transcripts use
+    pronouns ("he gathered", "she located") not job titles, so a query like "Captain gather*"
+    will MISS those pages. Instead generate the verb phrase alone:
+    - "What did the Captain do on the morning of August 10?" → also search "gathered records",
+      "locate* file", "signed logbook"  (NO "Captain" in these queries)
+    - "What evidence did investigators collect?" → also search "collected evidence", "seize*"
+    Common action-verb fragments for investigative reports: gather*, collect*, seize*, locat*,
+    retrieve*, inspect*, review*, signed logbook, gathered records.
 
 Return ONLY a JSON array of search query strings. No explanation.
 
