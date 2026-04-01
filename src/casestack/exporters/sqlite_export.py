@@ -462,7 +462,7 @@ class SqliteExporter:
                 continue
             rows.append((fk, p.document_id, p.page_number, p.text_content, p.char_count))
         conn.executemany(
-            """INSERT INTO pages
+            """INSERT OR IGNORE INTO pages
                (document_id, doc_id, page_number, text_content, char_count)
                VALUES (?, ?, ?, ?, ?)""",
             rows,
@@ -570,7 +570,7 @@ class SqliteExporter:
             for i in images
         ]
         conn.executemany(
-            """INSERT INTO extracted_images
+            """INSERT OR IGNORE INTO extracted_images
                (document_id, page_number, image_index, width, height, format,
                 file_path, description, size_bytes)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",

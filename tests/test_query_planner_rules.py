@@ -99,5 +99,67 @@ class TestAnswerSystemNumericalReasoning:
         assert "Cite every" in ANSWER_SYSTEM or "cite every" in ANSWER_SYSTEM.lower()
 
     def test_no_hallucination_instruction(self):
-        """Must not make claims without citations."""
-        assert "without citations" in ANSWER_SYSTEM or "no citation" in ANSWER_SYSTEM.lower()
+        """Must not make claims without citations or speculate beyond the evidence."""
+        assert (
+            "without citations" in ANSWER_SYSTEM
+            or "no citation" in ANSWER_SYSTEM.lower()
+            or "do not speculate" in ANSWER_SYSTEM.lower()
+            or "speculate" in ANSWER_SYSTEM.lower()
+        )
+
+
+class TestAnswerSystemSourceHierarchy:
+    """Verify ANSWER_SYSTEM encodes the evidentiary source hierarchy."""
+
+    def test_primary_records_ranked_highest(self):
+        """Primary event records (logs, count sheets) must outrank narrative summaries."""
+        assert "Primary event records" in ANSWER_SYSTEM or "primary event" in ANSWER_SYSTEM.lower()
+
+    def test_fd302_ranked_above_summaries(self):
+        """FD-302 interview transcripts must be explicitly ranked above investigative summaries."""
+        assert "FD-302" in ANSWER_SYSTEM or "interview transcript" in ANSWER_SYSTEM.lower()
+
+    def test_narrative_summaries_ranked_lowest(self):
+        """Narrative summaries must be identified as lowest-authority source type."""
+        assert "Narrative summar" in ANSWER_SYSTEM or "narrative summar" in ANSWER_SYSTEM.lower()
+
+    def test_primary_record_overrides_summary(self):
+        """Must instruct LLM to prefer primary records when they conflict with summaries."""
+        assert "authoritative" in ANSWER_SYSTEM.lower()
+
+    def test_multi_source_confirmation(self):
+        """When multiple sources confirm the same fact, cite all of them."""
+        assert "multiple source" in ANSWER_SYSTEM.lower() or "confirm the same" in ANSWER_SYSTEM.lower()
+
+
+class TestAnswerSystemHonestyFraming:
+    """Verify ANSWER_SYSTEM enforces three-tier honesty framing (documented / implied / absent)."""
+
+    def test_documented_fact_tier(self):
+        """Must distinguish explicit document statements from inferences."""
+        assert "documents state" in ANSWER_SYSTEM.lower() or "direct quote" in ANSWER_SYSTEM.lower()
+
+    def test_inference_tier(self):
+        """Must distinguish inferences from documented facts."""
+        assert "documents imply" in ANSWER_SYSTEM.lower() or "reasonable inference" in ANSWER_SYSTEM.lower()
+
+    def test_absence_of_evidence_tier(self):
+        """Must distinguish 'not in evidence' from 'proof of absence'."""
+        assert "do not address" in ANSWER_SYSTEM.lower() or "absence of evidence" in ANSWER_SYSTEM.lower()
+
+
+class TestAnswerSystemFollowUpQuestions:
+    """Verify ANSWER_SYSTEM instructs the LLM to surface follow-up questions."""
+
+    def test_follow_up_questions_required(self):
+        """Every answer must end with follow-up threads worth investigating."""
+        # The prompt must instruct the LLM to suggest follow-up questions
+        assert "follow-up" in ANSWER_SYSTEM.lower() or "threads worth" in ANSWER_SYSTEM.lower()
+
+    def test_follow_up_count(self):
+        """Must specify how many follow-up questions to generate (2-3)."""
+        assert "2" in ANSWER_SYSTEM and "3" in ANSWER_SYSTEM  # "2–3" or "2-3"
+
+    def test_follow_up_focus_on_gaps(self):
+        """Follow-up questions should surface gaps and contradictions, not generic queries."""
+        assert "gap" in ANSWER_SYSTEM.lower() or "contradiction" in ANSWER_SYSTEM.lower() or "unresolved" in ANSWER_SYSTEM.lower()

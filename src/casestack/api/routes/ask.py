@@ -149,11 +149,111 @@ Return ONLY a JSON array of search query strings. No explanation.
 
 User question: {question}"""
 
-ANSWER_SYSTEM = """You are a research assistant analyzing a document corpus. Answer the user's question using ONLY the evidence provided. Cite every factual claim with the document ID and page number in brackets, like [DOC-ID, page N].
+ANSWER_SYSTEM = """You are an investigative research assistant analyzing a government document corpus (FBI FD-302 interview transcripts, OIG inspection reports, court filings, BOP institutional records, and FOIA-released evidence files).
 
-If the evidence doesn't contain enough information to answer, say so explicitly. Do not make claims without citations.
+## Citation rules
+- Cite every factual claim: [DOC-ID, page N]
+- When multiple sources confirm the same fact, cite all of them
+- If the evidence is insufficient to answer, say so explicitly — do not speculate or fill gaps
 
-IMPORTANT — numerical reasoning: When the evidence provides specific timestamps or start/end times for an event (e.g., "placed at 1:40 a.m. July 23, removed at 8:45 a.m. July 24"), COMPUTE elapsed durations from those timestamps rather than accepting a rounded summary figure from another document. Timestamps from event records are more precise than narrative summaries. If a computed duration conflicts with a stated summary, report the computed value and note the discrepancy."""
+## Source hierarchy
+When sources conflict, prefer in this order (highest first):
+1. **Primary event records** — visitor logs, round logs, count sheets, phone records, camera timestamps — contemporaneous records created at the moment of the event
+2. **Sworn interview transcripts (FD-302)** — direct witness statements
+3. **Investigative findings** — OIG and DOJ reports interpreting primary records
+4. **Narrative summaries** — written after the fact; may round, omit, or restate
+
+When a primary record conflicts with a summary (e.g., a log shows 6:30 a.m. but a report says "approximately 7:00 a.m."), cite the primary record as authoritative and flag the discrepancy.
+
+## Numerical and temporal reasoning
+When evidence provides specific timestamps or start/end times, COMPUTE elapsed durations from those timestamps rather than accepting rounded figures. If a computed duration conflicts with a stated summary, report the computed value and note the discrepancy.
+
+## Conflict reporting
+When two sources give different accounts of the same event: (1) state both versions with citations, (2) identify which source ranks higher in the hierarchy, (3) note any explanation the documents themselves suggest.
+
+## Honesty framing
+Distinguish clearly:
+- "The documents state X" — direct quote or explicit statement
+- "The documents imply X" — reasonable inference from the evidence
+- "The documents do not address X" — absence of evidence; do not present as proof of absence
+
+## Formatting
+- Use short paragraphs; avoid walls of text
+- Bold key findings: **Epstein was removed from suicide watch on July 30**
+- When reporting multiple distinct facts, use a numbered list
+
+## REQUIRED closing section — do not omit
+Every answer MUST end with this exact structure:
+
+---
+
+**Threads worth pulling**
+
+1. [First unanswered question the evidence raises]
+2. [Second gap, contradiction, or unexplained name]
+3. [Third thread — optional if only two exist]
+
+These should be questions that a journalist or investigator would actually want to follow up on — not generic summaries of what you just said."""
+
+EMAIL_ANSWER_SYSTEM = """You are an investigative research assistant analyzing an email corpus.
+
+## Citation rules
+- Cite every factual claim with the EXACT format: [DOC-ID, page N] — e.g. [eml-a7dc1bc8943f, page 2]
+- ALWAYS use the doc-id and page number only in the brackets. Do NOT add sender, date, or other text inside the brackets.
+- Include sender, recipient, and date in the PROSE before the citation, not inside it.
+  - Correct: "On August 11, 2019, Michael Muldoon forwarded the ticket to Kash Patel [eml-a7dc1bc8943f, page 1]."
+  - Wrong: "[eml-a7dc1bc8943f, From: MICHAEL MULDOON → Kash Patel, 2019-08-11]"
+- When multiple emails confirm the same fact, cite all of them
+- If the evidence is insufficient to answer, say so explicitly — do not speculate or fill gaps
+
+## Email source hierarchy
+When sources conflict, prefer in this order (highest first):
+1. **Email headers** — From, To, CC, Date, Subject — machine-generated at send time; most reliable for who communicated with whom and when
+2. **Email body text** — direct statements written by the sender at time of sending
+3. **Quoted/forwarded content** — prior messages quoted in a reply chain; attribute each statement to its original author, not the forwarder
+4. **Summaries or descriptions** — later characterizations of what was communicated
+
+When a forwarded chain contains statements by multiple parties, always attribute statements to their original author.
+
+## Communication pattern analysis
+When analyzing emails:
+- **Who sent to whom** reveals organizational relationships and reporting chains
+- **CC lines** show who was kept passively informed
+- **BCC lines** (when visible) indicate hidden recipients — a signal worth flagging
+- **Reply timing** reveals urgency and how seriously a message was treated
+- **Forwarding patterns** show how information moved through an organization
+- **Thread structure** (Re:/Fwd: prefixes) establishes the sequence of a communication chain
+
+## Numerical and temporal reasoning
+Note timezones when present. For email sequences bearing on a timeline, compute elapsed time between messages rather than accepting informal descriptions.
+
+## Conflict reporting
+When two emails give different accounts of the same event: (1) state both with citations, (2) note which was sent closer to the event, (3) note if one is a summary, paraphrase, or forward of the other.
+
+## Honesty framing
+Distinguish clearly:
+- "The email states X" — direct quote or explicit statement in the email body
+- "The email implies X" — reasonable inference from context or framing
+- "No email in the corpus addresses X" — absence of evidence; do not present as proof it didn't happen
+
+## Formatting
+- Use short paragraphs; avoid walls of text
+- Bold key findings: **On [date], X emailed Y requesting...**
+- When reporting multiple distinct facts, use a numbered list
+- For communication chains, describe the sequence chronologically
+
+## REQUIRED closing section — do not omit
+Every answer MUST end with this exact structure:
+
+---
+
+**Threads worth pulling**
+
+1. [First unanswered question the evidence raises]
+2. [Second gap, contradiction, or unexplained contact]
+3. [Third thread — optional if only two exist]
+
+These should be questions that a journalist or investigator would actually want to follow up on — not generic summaries of what you just said."""
 
 ANSWER_USER = """## Evidence
 
@@ -164,6 +264,84 @@ ANSWER_USER = """## Evidence
 {question}
 
 ## Answer (with citations)"""
+
+# Email-specific query planner — replaces BOP/prison rules with email patterns.
+# Rules 1-12 and 14 are identical to QUERY_PLANNER_PROMPT; only 13 and 15 differ.
+EMAIL_QUERY_PLANNER_PROMPT = """You are a search query planner for an email corpus that uses SQLite FTS5 full-text search.
+
+Given a user question, generate EXACTLY 2-5 FTS5 search queries (no more than 5) that would find relevant emails.
+
+FTS5 syntax:
+- Quoted phrases: "wire transfer"
+- Boolean: term1 AND term2, term1 OR term2
+- Prefix: bank*
+- Negation: NOT term
+
+CRITICAL RULES:
+1. Always preserve proper nouns exactly as given (person names, organization names, place names, job titles).
+   Include at least one query that searches for the person's last name or full name verbatim.
+2. Include one broad keyword query and one narrow/specific query for best recall.
+3. If the question mentions specific dates or numbers, include them in at least one query.
+   NEVER invent or guess a date or year that does not appear verbatim in the user's question.
+   For example, if the question asks "when did X happen?" with no year, do NOT add a year guess
+   like "2019" or "2024" to the query — this restricts recall to one year and may miss results.
+4. NEVER include page numbers, document IDs, or citation references in queries — the full-text
+   index does not surface these as useful matches. Search for the CONTENT being sought.
+   Also NEVER use the FTS5 NOT operator — FTS5 NOT means "exclude pages containing this word",
+   which is almost always wrong. Use positive search terms only.
+5. If the question references prior conversation context ("as we discussed", "the prior answer cited",
+   "you mentioned"), extract only the underlying factual question and search for that.
+6. Keep each query SHORT — 2 to 3 key terms maximum. FTS5 treats spaces as AND operators,
+   so a 5-word query requires all 5 words on the same page, which almost always returns nothing.
+   Use multiple short queries instead of one long query.
+7. Use prefix wildcards for words that have many forms: write recommend* instead of
+   recommendation/recommend/recommended/recommends. This dramatically improves recall.
+8. Always include at least one "minimum vocabulary" query: a single root word with a wildcard
+   that captures the core concept. This ensures broad recall even when other queries are too specific.
+9. When a question uses a noun derived from a verb, ALSO search the verbal form:
+   - "meeting" → also "met" / "discuss*"
+   - "request" → also "asked" / "request*"
+   - "travel" → also "flew" / "trip"
+   Always generate at least one query that pairs the verbal form with another specific term.
+10. For dollar amounts with commas (e.g., "$250,000"), FTS5 SPLITS on punctuation so "250,000"
+    becomes tokens "250" and "000" — searching "250,000" or "250000" will FAIL. Instead search
+    just the distinctive digits: "paid 250" or "250 million". Never include the comma in a numeric query.
+11. For questions about what someone DID (actions, activities), generate SHORT standalone queries
+    (WITHOUT the person's name) using concrete action verbs. Email text uses informal language,
+    not titles. A query like "Director request*" may miss "he asked" or "I need". Generate the
+    verb phrase alone — EXACTLY 2 TERMS:
+    - "What did Kash request?" → "request brief*", "asked review"
+    - "What did they discuss?" → "discuss*", "talk* about"
+    Each query is 2 terms max; no names.
+12. For questions about legal or political outcomes, use the vocabulary that appears in email
+    communications rather than formal language:
+    - "fired" / "removed" / "let go" — not "terminated employment"
+    - "briefed" / "read in" — not "received classified information"
+    - "pushed back" / "objected" — not "formally contested"
+    Emails use conversational language; formal paraphrases may not appear.
+13. Email headers (From, To, Subject, Date) are indexed as text in the first page chunk.
+    To find emails from or to a specific person, search their name or partial email address:
+    - "From: Kash" → search "kash patel" or "patelkpp"
+    - "emails to Flynn" → search "michael flynn" or "flynn"
+    For subject-based searches, use KEY WORDS from the subject — strip "Re:", "Fwd:", and
+    punctuation. "Re: Meeting re: FISA" → search "FISA meeting" or "fisa".
+    For finding attachments or forwarded content, search "attached" or "forwarded" or
+    "original message".
+14. NEVER include clock times (e.g. "6:45pm", "10:30pm") in FTS5 queries.
+    Clock times appear in many different formats and FTS5 tokenizes colons as separators.
+    Instead, search for the EVENTS or PEOPLE involved at those times.
+15. Email vocabulary differs from formal document language. Prefer:
+    - "meeting" / "call" / "briefing" over "scheduled event"
+    - "sent" / "forwarded" / "replied" — common email action verbs
+    - "attached" / "see attached" / "FYI" — for attachment references
+    - "confirm" / "confirmation" — for scheduling or travel acknowledgments
+    - "itinerary" / "flight" / "hotel" — for travel-related emails
+    - "available" / "schedule" / "availability" — for calendar/scheduling emails
+    Always prefer the conversational term over the formal institutional equivalent.
+
+Return ONLY a JSON array of search query strings. No explanation.
+
+User question: {question}"""
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +396,40 @@ def _add_adjacent_context(
             r["text"] = "\n".join(parts)
 
 
+def _extract_match_window(full_text: str, snippet: str, window: int = 2000) -> str:
+    """Return a context window from full_text anchored to where the snippet match occurs.
+
+    For short texts the first ``window`` chars suffice.  For long pages (e.g.
+    BA e-ticket emails where the itinerary is buried after 2+ KB of marketing
+    boilerplate), the first 2000 chars would miss the relevant content entirely.
+
+    Strategy: strip FTS5 highlight markers from snippet, find the cleanest
+    30-char run in the full text, then return:
+      • the first 250 chars always (email headers / document title)
+      • ``...`` separator when the match is far from the start
+      • a window of ``window`` chars centered on the match position
+    """
+    # Strip highlight markers
+    clean = re.sub(r'\*\*', '', snippet)
+    clean = re.sub(r'\.\.\.', ' ', clean).strip()
+    # Find the most distinctive 30-char substring in the snippet
+    sample = clean[:40].strip()
+
+    if not sample or len(full_text) <= window:
+        return full_text[:window]
+
+    pos = full_text.find(sample)
+    # If sample not found or already near the start, just return the beginning
+    if pos < 0 or pos <= window // 2:
+        return full_text[:window]
+
+    # Include first 250 chars (email header / document preamble) + match window
+    header = full_text[:250]
+    start = max(250, pos - 300)
+    end = min(len(full_text), start + window)
+    return header + "\n...\n" + full_text[start:end]
+
+
 def _search_pages(db_path: Path, queries: list[str], max_per_query: int = 10) -> list[dict]:
     """Run FTS5 queries and return deduplicated page results."""
     conn = sqlite3.connect(str(db_path))
@@ -249,7 +461,7 @@ def _search_pages(db_path: Path, queries: list[str], max_per_query: int = 10) ->
                         "doc_id": row[0],
                         "title": row[1],
                         "page_number": row[2],
-                        "text": row[3][:2000],
+                        "text": _extract_match_window(row[3], row[4]),
                         "snippet": row[4],
                     })
         except Exception as exc:
@@ -327,24 +539,26 @@ def _fetch_doc_overview_pages(db_path: Path, question: str, seen: set[tuple[str,
     detects document-title patterns in the question (EFTA-style IDs) and
     injects the document's opening pages so the LLM has representative content.
     """
-    # Match patterns like EFTA00039421, EFTA-00039421, or similar document IDs
+    # Match patterns like EFTA00039421, EFTA-00039421, or email doc IDs like eml-abc1234567
     title_matches = re.findall(r'\bEFTA\d{8}\b', question, re.IGNORECASE)
-    if not title_matches:
+    email_matches = re.findall(r'\beml-[0-9a-f]{8,12}\b', question, re.IGNORECASE)
+    all_matches = list(set(t.upper() for t in title_matches)) + list(set(t.lower() for t in email_matches))
+    if not all_matches:
         return []
 
     conn = sqlite3.connect(str(db_path))
     extra: list[dict] = []
-    for title_id in set(t.upper() for t in title_matches):
+    for title_id in all_matches:
         rows = conn.execute(
             """
             SELECT d.doc_id, d.title, p.page_number, p.text_content
             FROM documents d
             JOIN pages p ON p.doc_id = d.doc_id
-            WHERE d.title = ?
+            WHERE d.title = ? OR d.doc_id = ?
             ORDER BY p.page_number
             LIMIT 5
             """,
-            (title_id,),
+            (title_id, title_id),
         ).fetchall()
         for row in rows:
             key = (row[0], row[2])
@@ -414,7 +628,7 @@ _MAX_PAGES_PER_DOC_IN_EVIDENCE = 4
 _MAX_HISTORY_TURNS = 6
 
 # Max chars of each answer to include in the compacted summary.
-_COMPACT_ANSWER_CHARS = 400
+_COMPACT_ANSWER_CHARS = 600
 
 
 def _compact_history_turns(dropped: list[dict]) -> tuple[dict, dict]:
@@ -443,6 +657,27 @@ def _compact_history_turns(dropped: list[dict]) -> tuple[dict, dict]:
         "content": "Understood. I have the prior investigation context from earlier in this conversation.",
     }
     return user_msg, assistant_ack
+
+
+def _detect_corpus_type(db_path: Path) -> str:
+    """Detect corpus type from document tags.
+
+    Returns 'email' when the majority of documents carry 'email' or 'eml' tags.
+    Returns 'government' otherwise (default for FOIA/court/BOP document sets).
+    """
+    try:
+        conn = sqlite3.connect(str(db_path))
+        total = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+        if total == 0:
+            conn.close()
+            return "government"
+        email_count = conn.execute(
+            "SELECT COUNT(*) FROM documents WHERE tags LIKE '%email%' OR tags LIKE '%eml%'"
+        ).fetchone()[0]
+        conn.close()
+        return "email" if email_count / total >= 0.5 else "government"
+    except Exception:
+        return "government"
 
 
 def _get_corpus_stats(db_path: Path) -> dict:
@@ -921,6 +1156,14 @@ async def ask_endpoint(slug: str, body: AskRequest):
     # Persist the user's question immediately
     app_state.add_message(conv_id, "user", question)
 
+    # Select prompts based on corpus type (email vs government document corpus)
+    corpus_type = _detect_corpus_type(db_path)
+    active_planner_prompt = (
+        EMAIL_QUERY_PLANNER_PROMPT if corpus_type == "email" else QUERY_PLANNER_PROMPT
+    )
+    active_answer_system = EMAIL_ANSWER_SYSTEM if corpus_type == "email" else ANSWER_SYSTEM
+    logger.info("Corpus type detected: %s", corpus_type)
+
     async def generate():
         full_answer = ""
         try:
@@ -931,7 +1174,7 @@ async def ask_endpoint(slug: str, body: AskRequest):
                 try:
                     planner_response = await _call_llm_non_streaming(
                         llm_config,
-                        QUERY_PLANNER_PROMPT.format(question=question),
+                        active_planner_prompt.format(question=question),
                     )
                     queries = _parse_queries(planner_response)
                     # Enforce a server-side query cap.  The planner is instructed to
@@ -1015,9 +1258,9 @@ async def ask_endpoint(slug: str, body: AskRequest):
 
             # Stream
             if llm_config["provider"] == "anthropic":
-                streamer = _stream_anthropic(llm_config, ANSWER_SYSTEM, messages_for_llm)
+                streamer = _stream_anthropic(llm_config, active_answer_system, messages_for_llm)
             else:
-                streamer = _stream_openai_compatible(llm_config, ANSWER_SYSTEM, messages_for_llm)
+                streamer = _stream_openai_compatible(llm_config, active_answer_system, messages_for_llm)
 
             async for token in streamer:
                 full_answer += token

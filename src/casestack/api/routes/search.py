@@ -23,7 +23,9 @@ def _sanitize_fts5(query: str) -> str:
 
 @router.get("/cases/{slug}/search")
 def search(slug: str, q: str = Query(...), type: str = Query("all"),
-           offset: int = 0, limit: int = 50):
+           offset: int = 0, limit: int = 50,
+           date_from: str | None = Query(default=None, description="Filter docs on or after YYYY-MM-DD"),
+           date_to: str | None = Query(default=None, description="Filter docs on or before YYYY-MM-DD")):
     """Unified search across pages, transcripts, images, entities."""
     db_path = _get_case_db(slug)
     q = _sanitize_fts5(q)
@@ -40,31 +42,46 @@ def search(slug: str, q: str = Query(...), type: str = Query("all"),
         else set(type.split(","))
     )
 
+    # Build optional date filter clause for documents join
+    date_params: list = []
+    date_where = ""
+    if date_from:
+        date_where += " AND d.date >= ?"
+        date_params.append(date_from)
+    if date_to:
+        date_where += " AND d.date <= ?"
+        date_params.append(date_to)
+
     # Search pages via FTS5
     if "pages" in requested_types:
         try:
-            rows = conn.execute("""
-                SELECT d.doc_id, d.title, p.page_number,
+            rows = conn.execute(f"""
+                SELECT d.doc_id, d.title, d.date, p.page_number,
                        snippet(pages_fts, 0, '<mark>', '</mark>', '...', 64) as snippet,
                        rank
                 FROM pages_fts
                 JOIN pages p ON p.id = pages_fts.rowid
                 JOIN documents d ON d.id = p.document_id
-                WHERE pages_fts MATCH ?
+                WHERE pages_fts MATCH ?{date_where}
                 ORDER BY rank
                 LIMIT ? OFFSET ?
-            """, (q, limit, offset)).fetchall()
+            """, (q, *date_params, limit, offset)).fetchall()
             for row in rows:
                 results.append({
                     "type": "page",
                     "document_id": row["doc_id"],
                     "title": row["title"],
+                    "date": row["date"],
                     "page_number": row["page_number"],
                     "snippet": row["snippet"],
                     "rank": row["rank"],
                 })
             count_row = conn.execute(
-                "SELECT COUNT(*) FROM pages_fts WHERE pages_fts MATCH ?", (q,)
+                f"""SELECT COUNT(*) FROM pages_fts
+                    JOIN pages p ON p.id = pages_fts.rowid
+                    JOIN documents d ON d.id = p.document_id
+                    WHERE pages_fts MATCH ?{date_where}""",
+                (q, *date_params)
             ).fetchone()
             total += count_row[0]
         except Exception:

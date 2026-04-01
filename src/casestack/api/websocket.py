@@ -6,34 +6,35 @@ import threading
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-# Registry of active WebSocket connections per case slug
-_ws_connections: dict[str, list[WebSocket]] = {}
+# Registry of active WebSocket connections per case slug.
+# Each entry stores (websocket, event_loop) so we can safely send from threads.
+_ws_connections: dict[str, list[tuple[WebSocket, asyncio.AbstractEventLoop]]] = {}
 _lock = threading.Lock()
 
 
-def register_ws(slug: str, ws: WebSocket) -> None:
+def register_ws(slug: str, ws: WebSocket, loop: asyncio.AbstractEventLoop) -> None:
     with _lock:
-        _ws_connections.setdefault(slug, []).append(ws)
+        _ws_connections.setdefault(slug, []).append((ws, loop))
 
 
 def unregister_ws(slug: str, ws: WebSocket) -> None:
     with _lock:
         if slug in _ws_connections:
-            _ws_connections[slug] = [w for w in _ws_connections[slug] if w is not ws]
+            _ws_connections[slug] = [(w, l) for w, l in _ws_connections[slug] if w is not ws]
 
 
 def broadcast_event(slug: str, event_type: str, data: dict) -> None:
     """Send event to all WebSocket connections for a case (thread-safe)."""
     with _lock:
         connections = list(_ws_connections.get(slug, []))
-    for ws in connections:
+    payload = {"type": event_type, **data}
+    for ws, loop in connections:
         try:
-            # Use asyncio to send from sync context
-            loop = asyncio.new_event_loop()
-            loop.run_until_complete(ws.send_json({"type": event_type, **data}))
-            loop.close()
+            # Schedule send on the WebSocket's own event loop from ingest thread
+            future = asyncio.run_coroutine_threadsafe(ws.send_json(payload), loop)
+            future.result(timeout=2)
         except Exception:
-            pass  # Connection may be closed
+            pass  # Connection may be closed or timed out
 
 
 class WebSocketCallback:

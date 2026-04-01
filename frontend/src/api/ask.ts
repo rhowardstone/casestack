@@ -10,6 +10,7 @@ export interface AskEvent {
     message?: string
     text?: string
     sources?: Array<{ doc_id: string; title: string; page: number }>
+    conversation_id?: string
   }
 }
 

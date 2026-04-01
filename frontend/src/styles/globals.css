@@ -57,6 +57,12 @@ mark {
   to { transform: rotate(360deg); }
 }
 
+/* Pulse animation for active step indicator */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
 /* Markdown content rendered inside assistant messages */
 .markdown-content h1,
 .markdown-content h2,
@@ -122,4 +128,37 @@ mark {
 }
 .markdown-content a:hover {
   text-decoration: underline;
+}
+/* Suppress mailto auto-links — email addresses should render as plain text */
+.markdown-content a[href^="mailto"] {
+  color: inherit;
+  text-decoration: none;
+  pointer-events: none;
+  cursor: text;
+}
+
+/* Inline citation chips rendered inside assistant message text */
+.inline-cite {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  margin: 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: 'Inter', system-ui, sans-serif;
+  background: var(--accent-light);
+  color: var(--accent);
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  border-radius: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  vertical-align: middle;
+  transition: background 0.12s, color 0.12s;
+  user-select: none;
+  line-height: 1.6;
+}
+.inline-cite:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
 }

@@ -27,8 +27,9 @@ def create_app() -> FastAPI:
         cases, pipeline, ingest, search,
         documents, entities, images, transcripts,
         map as map_routes,
-        ask,
+        ask, staging, conversations, projects,
     )
+    app.include_router(projects.router, prefix="/api")
     app.include_router(cases.router, prefix="/api")
     app.include_router(pipeline.router, prefix="/api")
     app.include_router(ingest.router, prefix="/api")
@@ -39,12 +40,15 @@ def create_app() -> FastAPI:
     app.include_router(transcripts.router, prefix="/api")
     app.include_router(map_routes.router, prefix="/api")
     app.include_router(ask.router, prefix="/api")
+    app.include_router(staging.router, prefix="/api")
+    app.include_router(conversations.router, prefix="/api")
 
     # WebSocket endpoint for live ingest progress
     @app.websocket("/ws/cases/{slug}/ingest")
     async def ingest_ws(websocket: WebSocket, slug: str):
         await websocket.accept()
-        register_ws(slug, websocket)
+        loop = asyncio.get_event_loop()
+        register_ws(slug, websocket, loop)
         try:
             while True:
                 await websocket.receive_text()  # Keep connection alive

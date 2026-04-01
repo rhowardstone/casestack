@@ -76,20 +76,21 @@ class EntityExtractor:
     def __init__(
         self,
         config: Settings,
-        registry: PersonRegistry,
+        registry: PersonRegistry | None = None,
         entity_types: set[str] | None = None,
     ) -> None:
         self.config = config
         self.registry = registry
-        self.entity_types = entity_types or {"PERSON"}
+        self.entity_types = entity_types or {"PERSON", "ORG", "GPE", "LOC", "EMAIL_ADDR", "PHONE"}
         self._nlp: Language = spacy.load(config.spacy_model)
 
         # Pre-build a mapping of lowered canonical names to person IDs
         self._name_to_id: dict[str, str] = {}
-        for person_id, person in registry._persons_by_id.items():
-            self._name_to_id[person.name.lower()] = person_id
-            for alias in person.aliases:
-                self._name_to_id[alias.lower()] = person_id
+        if registry is not None:
+            for person_id, person in registry._persons_by_id.items():
+                self._name_to_id[person.name.lower()] = person_id
+                for alias in person.aliases:
+                    self._name_to_id[alias.lower()] = person_id
 
     def extract(self, text: str) -> list[str]:
         """Return a deduplicated list of person IDs found in *text*.
@@ -115,7 +116,7 @@ class EntityExtractor:
             doc = self._nlp(chunk)
             for ent in doc.ents:
                 if ent.label_ == "PERSON":
-                    person_id = self.registry.match(ent.text)
+                    person_id = self.registry.match(ent.text) if self.registry else None
                     if person_id is not None:
                         matched_ids.add(person_id)
                     entities.append(
@@ -137,13 +138,14 @@ class EntityExtractor:
                         )
                     )
 
-        # Direct name scan for person IDs
-        text_lower = text.lower()
-        for name_lower, person_id in self._name_to_id.items():
-            if len(name_lower) < 3:
-                continue
-            if name_lower in text_lower:
-                matched_ids.add(person_id)
+        # Direct name scan for person IDs (only when registry is provided)
+        if self._name_to_id:
+            text_lower = text.lower()
+            for name_lower, person_id in self._name_to_id.items():
+                if len(name_lower) < 3:
+                    continue
+                if name_lower in text_lower:
+                    matched_ids.add(person_id)
 
         # Regex-based entity extraction
         for entity_type, pattern in REGEX_EXTRACTORS.items():

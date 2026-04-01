@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Outlet, useParams } from 'react-router-dom'
+import { Outlet, useParams, useLocation } from 'react-router-dom'
 import { fetchJSON } from '../api/client'
 import Sidebar from './Sidebar'
 
@@ -10,7 +10,11 @@ interface CaseInfo {
 
 export default function Layout() {
   const { slug } = useParams<{ slug: string }>()
+  const location = useLocation()
   const [caseName, setCaseName] = useState('')
+
+  // Ask page is full-height and manages its own scroll — no padding or overflow
+  const isAskPage = location.pathname.endsWith('/ask')
 
   useEffect(() => {
     if (!slug) return
@@ -22,7 +26,13 @@ export default function Layout() {
   return (
     <div style={styles.wrapper}>
       <Sidebar slug={slug || ''} caseName={caseName} />
-      <main style={styles.content}>
+      <main
+        style={{
+          ...styles.content,
+          padding: isAskPage ? 0 : 32,
+          overflow: isAskPage ? 'hidden' : 'auto',
+        }}
+      >
         <Outlet />
       </main>
     </div>
@@ -32,12 +42,13 @@ export default function Layout() {
 const styles: Record<string, React.CSSProperties> = {
   wrapper: {
     display: 'flex',
-    minHeight: '100vh',
+    flexDirection: 'column',
+    height: '100vh',
+    overflow: 'hidden',
     background: 'var(--bg)',
   },
   content: {
     flex: 1,
-    padding: 32,
-    overflowY: 'auto',
+    minHeight: 0,
   },
 }

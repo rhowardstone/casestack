@@ -70,6 +70,12 @@ def start_ingest(slug: str, body: IngestStartRequest | None = None):
                     trans_count = case_db.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0]
                 except sqlite3.OperationalError:
                     trans_count = 0
+                try:
+                    entity_count = case_db.execute(
+                        "SELECT COUNT(DISTINCT lower(text) || entity_type) FROM extracted_entities"
+                    ).fetchone()[0]
+                except sqlite3.OperationalError:
+                    entity_count = 0
                 case_db.close()
                 state.update_case_stats(
                     slug,
@@ -77,6 +83,7 @@ def start_ingest(slug: str, body: IngestStartRequest | None = None):
                     page_count=page_count,
                     image_count=img_count,
                     transcript_count=trans_count,
+                    entity_count=entity_count,
                     db_size_bytes=db_path.stat().st_size,
                 )
 
@@ -131,8 +138,23 @@ def ingest_status(slug: str):
 
     # Check if case has existing output (e.g. ingested via CLI)
     case_info = state.get_case(slug)
-    if case_info and case_info.get("document_count", 0) > 0:
-        return {"status": "completed", "source": "cli"}
+    if case_info:
+        # Check stored count first (fast path)
+        if case_info.get("document_count", 0) > 0:
+            return {"status": "completed", "source": "cli"}
+        # Otherwise probe the output DB directly (handles CLI-ingested cases where
+        # update_case_stats was never called)
+        from casestack.api.deps import get_case_db
+        import sqlite3 as _sqlite3
+        try:
+            db_path = get_case_db(slug)
+            db = _sqlite3.connect(str(db_path))
+            doc_count = db.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+            db.close()
+            if doc_count > 0:
+                return {"status": "completed", "source": "cli"}
+        except Exception:
+            pass
 
     return {"status": "never_run"}
 

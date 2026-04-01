@@ -1,19 +1,26 @@
-import { useState, useMemo } from 'react'
-import { useParams } from 'react-router-dom'
+import { useState, useMemo, useEffect } from 'react'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { useSearch } from '../hooks/useSearch'
 import SearchResultCard from '../components/SearchResultCard'
 import DocumentReader from '../components/DocumentReader'
 
 const TYPE_OPTIONS = [
   { value: 'all', label: 'All' },
-  { value: 'page', label: 'Pages' },
-  { value: 'transcript', label: 'Transcripts' },
-  { value: 'image', label: 'Images' },
+  { value: 'pages', label: 'Pages' },
+  { value: 'transcripts', label: 'Transcripts' },
+  { value: 'images', label: 'Images' },
 ] as const
 
 export default function Search() {
   const { slug = '' } = useParams<{ slug: string }>()
-  const [query, setQuery] = useState('')
+  const [searchParams] = useSearchParams()
+  const [query, setQuery] = useState(() => searchParams.get('q') ?? '')
+
+  // Sync query when the ?q= param changes (e.g. navigated from entity page)
+  useEffect(() => {
+    const q = searchParams.get('q')
+    if (q !== null) setQuery(q)
+  }, [searchParams])
   const [typeFilter, setTypeFilter] = useState('all')
   const [expandedId, setExpandedId] = useState<string | null>(null)
 

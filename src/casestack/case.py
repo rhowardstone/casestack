@@ -41,6 +41,8 @@ _NESTED_ALIASES: dict[str, str] = {
 class CaseConfig(BaseModel):
     """Configuration for a single case/document collection."""
 
+    model_config = {"populate_by_name": True}
+
     name: str
     slug: str
     description: str = ""
@@ -92,12 +94,18 @@ class CaseConfig(BaseModel):
     ask_proxy_enabled: bool = False
     openrouter_api_key_env: str = "OPENROUTER_API_KEY"
 
+    # Optional absolute path overrides — set in case.yaml or by the API at
+    # case-creation time.  When None the legacy relative paths are used.
+    output_dir_override: Optional[Path] = Field(default=None, alias="output_dir")
+
     @property
     def data_dir(self) -> Path:
         return Path(f"./data/{self.slug}")
 
     @property
     def output_dir(self) -> Path:
+        if self.output_dir_override is not None:
+            return self.output_dir_override
         return Path(f"./output/{self.slug}")
 
     @property

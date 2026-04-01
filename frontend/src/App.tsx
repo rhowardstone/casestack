@@ -10,6 +10,8 @@ import EntityViewer from './pages/EntityViewer'
 import TranscriptBrowser from './pages/TranscriptBrowser'
 import AskAssistant from './pages/AskAssistant'
 import CaseSettings from './pages/CaseSettings'
+import ProjectDashboard from './pages/ProjectDashboard'
+import DocumentBrowser from './pages/DocumentBrowser'
 
 function App() {
   return (
@@ -17,8 +19,10 @@ function App() {
       <Routes>
         <Route path="/" element={<CaseList />} />
         <Route path="/new" element={<NewCaseWizard />} />
+        <Route path="/project/:slug" element={<ProjectDashboard />} />
         <Route path="/case/:slug" element={<Layout />}>
           <Route index element={<Dashboard />} />
+          <Route path="documents" element={<DocumentBrowser />} />
           <Route path="search" element={<Search />} />
           <Route path="images" element={<ImageGallery />} />
           <Route path="entities" element={<EntityViewer />} />

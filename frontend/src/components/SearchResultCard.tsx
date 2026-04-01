@@ -1,5 +1,42 @@
 import type { SearchResult } from '../hooks/useSearch'
 
+// Strip markdown syntax from snippet text while preserving <mark> highlight tags.
+// Handles truncated snippets where closing ) of a link URL may be missing.
+function stripMarkdown(html: string): string {
+  return html
+    // Complete markdown links [text](url)
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    // Truncated markdown links [text](url...  (no closing paren — FTS5 cutoff)
+    .replace(/\[([^\]]*)\]\(\S+/g, '$1')
+    // Fragment: ](url) — snippet starts inside a link
+    .replace(/\]\([^)]*\)/g, ' ')
+    .replace(/\]\(\S+/g, ' ')
+    // Bare URLs (https:// and www.)
+    .replace(/https?:\/\/\S+/g, '')
+    .replace(/www\.\S+/g, '')
+    // Email separator lines (===...===, ---...---, ___...___) — 4+ repeated chars
+    .replace(/[=\-_]{4,}/g, '')
+    // Bold / italic
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/_{2}([^_]+)_{2}/g, '$1')
+    // Unescape \char
+    .replace(/\\(.)/g, '$1')
+    // Heading markers
+    .replace(/^#{1,6}\s+/gm, '')
+    // Blockquotes
+    .replace(/^\s*>\s*/gm, '')
+    // Table separator rows
+    .replace(/\|[-: |]+\|/g, '')
+    // Arrow/bullet artifacts from newsletter formatting
+    .replace(/[→←↑↓•·]/g, '')
+    // URL path fragments (relative URLs with slug-like segments)
+    .replace(/\S+utm_\w+[=]\S*/g, '')
+    // Collapse multiple spaces
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim()
+}
+
 const TYPE_STYLES: Record<string, { bg: string; color: string; label: string }> = {
   page: { bg: 'var(--accent-light)', color: 'var(--accent)', label: 'Page' },
   transcript: { bg: '#dcfce7', color: '#16a34a', label: 'Transcript' },
@@ -74,7 +111,7 @@ export default function SearchResultCard({ result, expanded, onToggle }: Props) 
           {/* Snippet with highlighted <mark> tags */}
           <div
             style={{ fontSize: 14, color: 'var(--text-muted)', lineHeight: 1.6 }}
-            dangerouslySetInnerHTML={{ __html: result.snippet }}
+            dangerouslySetInnerHTML={{ __html: stripMarkdown(result.snippet) }}
           />
         </div>
 

@@ -2,365 +2,227 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { fetchJSON } from '../api/client'
 
-interface Case {
+interface Dataset {
   slug: string
   name: string
   description: string
   document_count: number
   created_at?: string
-  updated_at?: string
+  last_opened_at?: string
   ingest_status?: 'running' | 'completed' | 'failed' | 'never_run'
+}
+
+interface ProjectDataset {
+  slug: string
+  name: string
+}
+
+interface Project {
+  slug: string
+  name: string
+  description: string
+  dataset_count: number
+  total_documents: number
+  datasets: ProjectDataset[]
+  created_at?: string
+  last_opened_at?: string
 }
 
 function formatDate(dateStr?: string): string {
   if (!dateStr) return ''
   try {
-    const d = new Date(dateStr)
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
-  } catch {
-    return ''
-  }
+    return new Date(dateStr).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+  } catch { return '' }
 }
 
 function StatusBadge({ status }: { status?: string }) {
-  let label: string
-  let style: React.CSSProperties
-
-  switch (status) {
-    case 'completed':
-      label = 'Completed'
-      style = { background: '#dcfce7', color: 'var(--success)' }
-      break
-    case 'running':
-      label = 'Running'
-      style = { background: 'var(--accent-light)', color: 'var(--accent)' }
-      break
-    case 'failed':
-      label = 'Failed'
-      style = { background: '#fee2e2', color: 'var(--danger)' }
-      break
-    default:
-      label = 'Not Started'
-      style = { background: '#f3f4f6', color: 'var(--text-muted)' }
-      break
+  const map: Record<string, { label: string; bg: string; color: string }> = {
+    completed: { label: 'Indexed', bg: '#dcfce7', color: 'var(--success)' },
+    running:   { label: 'Indexing…', bg: 'var(--accent-light)', color: 'var(--accent)' },
+    failed:    { label: 'Failed', bg: '#fee2e2', color: 'var(--danger)' },
   }
-
+  const s = map[status ?? ''] ?? { label: 'Not indexed', bg: '#f3f4f6', color: 'var(--text-muted)' }
   return (
-    <span
-      style={{
-        display: 'inline-block',
-        padding: '3px 10px',
-        fontSize: 11,
-        fontWeight: 600,
-        borderRadius: 'var(--radius-sm)',
-        letterSpacing: '0.02em',
-        ...style,
-      }}
-    >
-      {label}
+    <span style={{ display: 'inline-block', padding: '3px 10px', fontSize: 11, fontWeight: 600,
+      borderRadius: 'var(--radius-sm)', letterSpacing: '0.02em', background: s.bg, color: s.color }}>
+      {s.label}
     </span>
   )
 }
 
-function EmptyState() {
+function DatasetChip({ name }: { name: string }) {
   return (
-    <div style={styles.emptyState}>
-      <div style={styles.emptyIcon}>
-        <svg
-          width="80"
-          height="80"
-          viewBox="0 0 80 80"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <rect x="10" y="18" width="60" height="48" rx="6" stroke="#d1d5db" strokeWidth="2" fill="#f9fafb" />
-          <rect x="18" y="28" width="28" height="4" rx="2" fill="#d1d5db" />
-          <rect x="18" y="36" width="44" height="3" rx="1.5" fill="#e5e7eb" />
-          <rect x="18" y="43" width="36" height="3" rx="1.5" fill="#e5e7eb" />
-          <rect x="18" y="50" width="40" height="3" rx="1.5" fill="#e5e7eb" />
-          <circle cx="60" cy="58" r="14" fill="#2563eb" fillOpacity="0.1" stroke="#2563eb" strokeWidth="2" />
-          <line x1="56" y1="58" x2="64" y2="58" stroke="#2563eb" strokeWidth="2" strokeLinecap="round" />
-          <line x1="60" y1="54" x2="60" y2="62" stroke="#2563eb" strokeWidth="2" strokeLinecap="round" />
-        </svg>
-      </div>
-      <h2 style={styles.emptyTitle}>No cases yet</h2>
-      <p style={styles.emptyDescription}>
-        Create your first case to start ingesting and analyzing documents.
-      </p>
-      <Link to="/new" style={styles.emptyButton}>
-        Create Your First Case
-      </Link>
-    </div>
+    <span style={{ display: 'inline-block', padding: '2px 8px', fontSize: 11, fontWeight: 500,
+      borderRadius: 4, background: '#f0f4ff', color: '#3b5bdb', border: '1px solid #c5d5ff',
+      whiteSpace: 'nowrap' as const }}>
+      {name}
+    </span>
   )
 }
 
 export default function CaseList() {
-  const [cases, setCases] = useState<Case[]>([])
+  const [tab, setTab] = useState<'projects' | 'datasets'>('projects')
+  const [projects, setProjects] = useState<Project[]>([])
+  const [datasets, setDatasets] = useState<Dataset[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetchJSON<Case[]>('/cases')
-      .then(setCases)
-      .catch(() => setCases([]))
-      .finally(() => setLoading(false))
+    Promise.all([
+      fetchJSON<Project[]>('/projects').catch(() => []),
+      fetchJSON<Dataset[]>('/cases').catch(() => []),
+    ]).then(([p, d]) => {
+      setProjects(p)
+      setDatasets(d)
+    }).finally(() => setLoading(false))
   }, [])
 
   return (
-    <div style={styles.page}>
-      {/* Header */}
-      <header style={styles.header}>
-        <div style={styles.headerInner}>
+    <div style={S.page}>
+      <header style={S.header}>
+        <div style={S.headerInner}>
           <div>
-            <h1 style={styles.logo}>CaseStack</h1>
-            <p style={styles.tagline}>Document Intelligence Platform</p>
+            <h1 style={S.logo}>CaseStack</h1>
+            <p style={S.tagline}>Document Intelligence Platform</p>
           </div>
-          <Link to="/new" style={styles.newCaseButton}>
+          <Link to="/new" style={S.newBtn}>
             <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
               <path d="M8 2a.75.75 0 01.75.75v4.5h4.5a.75.75 0 010 1.5h-4.5v4.5a.75.75 0 01-1.5 0v-4.5h-4.5a.75.75 0 010-1.5h4.5v-4.5A.75.75 0 018 2z" />
             </svg>
-            New Case
+            New Dataset
           </Link>
         </div>
       </header>
 
-      {/* Content */}
-      <main style={styles.content}>
+      <main style={S.content}>
+        {/* Tab switcher */}
+        <div style={S.tabs}>
+          <button style={{ ...S.tab, ...(tab === 'projects' ? S.tabActive : {}) }}
+            onClick={() => setTab('projects')}>
+            Projects
+            <span style={S.tabCount}>{projects.length}</span>
+          </button>
+          <button style={{ ...S.tab, ...(tab === 'datasets' ? S.tabActive : {}) }}
+            onClick={() => setTab('datasets')}>
+            Datasets
+            <span style={S.tabCount}>{datasets.length}</span>
+          </button>
+        </div>
+
         {loading ? (
-          <div style={styles.loadingState}>
-            <div style={styles.spinner} />
-            <span>Loading cases...</span>
-          </div>
-        ) : cases.length === 0 ? (
-          <EmptyState />
+          <div style={S.loading}><div style={S.spinner} /><span>Loading…</span></div>
+        ) : tab === 'projects' ? (
+          <ProjectsView projects={projects} />
         ) : (
-          <>
-            <div style={styles.sectionHeader}>
-              <h2 style={styles.sectionTitle}>
-                Your Cases
-                <span style={styles.caseCount}>{cases.length}</span>
-              </h2>
-            </div>
-            <div style={styles.caseGrid}>
-              {cases.map(c => (
-                <Link
-                  key={c.slug}
-                  to={`/case/${c.slug}`}
-                  style={styles.caseCard}
-                  className="case-card"
-                >
-                  <div style={styles.cardTop}>
-                    <h3 style={styles.caseName}>{c.name}</h3>
-                    <StatusBadge status={c.ingest_status} />
-                  </div>
-                  {c.description && (
-                    <p style={styles.caseDescription}>{c.description}</p>
-                  )}
-                  <div style={styles.cardMeta}>
-                    <span style={styles.metaItem}>
-                      <svg width="14" height="14" viewBox="0 0 16 16" fill="var(--text-muted)" style={{ flexShrink: 0 }}>
-                        <path d="M3.5 2A1.5 1.5 0 002 3.5v9A1.5 1.5 0 003.5 14h9a1.5 1.5 0 001.5-1.5v-7a.5.5 0 00-.146-.354l-4.5-4.5A.5.5 0 009 2H3.5zm5 .5L13 7h-3.5A1.5 1.5 0 018 5.5V2.5z" />
-                      </svg>
-                      {c.document_count} {c.document_count === 1 ? 'document' : 'documents'}
-                    </span>
-                    {c.updated_at && (
-                      <span style={styles.metaItem}>
-                        Last opened {formatDate(c.updated_at)}
-                      </span>
-                    )}
-                  </div>
-                </Link>
-              ))}
-            </div>
-          </>
+          <DatasetsView datasets={datasets} />
         )}
       </main>
     </div>
   )
 }
 
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    minHeight: '100vh',
-    background: 'var(--bg)',
-  },
-  header: {
-    background: 'var(--surface)',
-    borderBottom: '1px solid var(--border)',
-    padding: '0 32px',
-  },
-  headerInner: {
-    maxWidth: 960,
-    margin: '0 auto',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '24px 0',
-  },
-  logo: {
-    fontSize: 24,
-    fontWeight: 700,
-    color: 'var(--text)',
-    margin: 0,
-    letterSpacing: '-0.02em',
-  },
-  tagline: {
-    fontSize: 13,
-    color: 'var(--text-muted)',
-    margin: '2px 0 0',
-  },
-  newCaseButton: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 8,
-    padding: '10px 24px',
-    background: 'var(--accent)',
-    color: '#fff',
-    borderRadius: 'var(--radius-md)',
-    fontSize: 14,
-    fontWeight: 600,
-    textDecoration: 'none',
-    transition: 'all 0.15s ease',
-    boxShadow: '0 1px 3px rgba(37, 99, 235, 0.3)',
-  },
-  content: {
-    maxWidth: 960,
-    margin: '0 auto',
-    padding: '32px 32px 64px',
-  },
-  sectionHeader: {
-    marginBottom: 20,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: 600,
-    color: 'var(--text)',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 10,
-  },
-  caseCount: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    minWidth: 24,
-    height: 24,
-    padding: '0 8px',
-    fontSize: 12,
-    fontWeight: 600,
-    borderRadius: 12,
-    background: '#f3f4f6',
-    color: 'var(--text-muted)',
-  },
-  caseGrid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
-    gap: 16,
-  },
-  caseCard: {
-    display: 'block',
-    background: 'var(--surface)',
-    border: '1px solid var(--border)',
-    borderRadius: 'var(--radius-lg)',
-    padding: 24,
-    textDecoration: 'none',
-    color: 'inherit',
-    transition: 'all 0.2s ease',
-    cursor: 'pointer',
-  },
-  cardTop: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: 12,
-    marginBottom: 8,
-  },
-  caseName: {
-    fontSize: 16,
-    fontWeight: 600,
-    color: 'var(--text)',
-    margin: 0,
-    lineHeight: 1.3,
-  },
-  caseDescription: {
-    fontSize: 13,
-    color: 'var(--text-muted)',
-    lineHeight: 1.5,
-    margin: '0 0 16px',
-    display: '-webkit-box',
-    WebkitLineClamp: 2,
-    WebkitBoxOrient: 'vertical' as const,
-    overflow: 'hidden',
-  },
-  cardMeta: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 16,
-    paddingTop: 16,
-    borderTop: '1px solid var(--border)',
-    fontSize: 12,
-    color: 'var(--text-muted)',
-  },
-  metaItem: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 5,
-  },
-  // Empty state
-  emptyState: {
-    display: 'flex',
-    flexDirection: 'column' as const,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: '80px 32px',
-    textAlign: 'center' as const,
-  },
-  emptyIcon: {
-    marginBottom: 24,
-    opacity: 0.8,
-  },
-  emptyTitle: {
-    fontSize: 22,
-    fontWeight: 600,
-    color: 'var(--text)',
-    marginBottom: 8,
-  },
-  emptyDescription: {
-    fontSize: 15,
-    color: 'var(--text-muted)',
-    maxWidth: 360,
-    lineHeight: 1.6,
-    marginBottom: 28,
-  },
-  emptyButton: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 8,
-    padding: '12px 32px',
-    background: 'var(--accent)',
-    color: '#fff',
-    borderRadius: 'var(--radius-md)',
-    fontSize: 15,
-    fontWeight: 600,
-    textDecoration: 'none',
-    transition: 'all 0.15s ease',
-    boxShadow: '0 1px 3px rgba(37, 99, 235, 0.3)',
-  },
-  // Loading
-  loadingState: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 12,
-    padding: 64,
-    color: 'var(--text-muted)',
-    fontSize: 14,
-  },
-  spinner: {
-    width: 20,
-    height: 20,
-    border: '2px solid var(--border)',
-    borderTopColor: 'var(--accent)',
-    borderRadius: '50%',
-    animation: 'spin 0.6s linear infinite',
-  },
+function ProjectsView({ projects }: { projects: Project[] }) {
+  if (projects.length === 0) {
+    return (
+      <div style={S.empty}>
+        <p style={{ color: 'var(--text-muted)', fontSize: 15 }}>
+          No projects yet. Create a dataset first, then group datasets into a project.
+        </p>
+        <Link to="/new" style={S.emptyBtn}>Add Your First Dataset</Link>
+      </div>
+    )
+  }
+  return (
+    <div style={S.grid}>
+      {projects.map(p => (
+        <Link key={p.slug} to={`/project/${p.slug}`} style={S.card} className="case-card">
+          <div style={S.cardTop}>
+            <h3 style={S.cardName}>{p.name}</h3>
+            <span style={S.docCount}>{(p.total_documents ?? 0).toLocaleString()} docs</span>
+          </div>
+          {p.description && <p style={S.cardDesc}>{p.description}</p>}
+          {p.datasets && p.datasets.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap' as const, gap: 6, marginTop: 12 }}>
+              {p.datasets.map(d => <DatasetChip key={d.slug} name={d.name} />)}
+            </div>
+          )}
+          <div style={S.cardMeta}>
+            <span>{p.dataset_count} {p.dataset_count === 1 ? 'dataset' : 'datasets'}</span>
+            {p.last_opened_at && <span>Opened {formatDate(p.last_opened_at)}</span>}
+          </div>
+        </Link>
+      ))}
+    </div>
+  )
+}
+
+function DatasetsView({ datasets }: { datasets: Dataset[] }) {
+  if (datasets.length === 0) {
+    return (
+      <div style={S.empty}>
+        <p style={{ color: 'var(--text-muted)', fontSize: 15 }}>No datasets yet.</p>
+        <Link to="/new" style={S.emptyBtn}>Add Your First Dataset</Link>
+      </div>
+    )
+  }
+  return (
+    <div style={S.grid}>
+      {datasets.map(d => (
+        <Link key={d.slug} to={`/case/${d.slug}`} style={S.card} className="case-card">
+          <div style={S.cardTop}>
+            <h3 style={S.cardName}>{d.name}</h3>
+            <StatusBadge status={d.ingest_status} />
+          </div>
+          {d.description && <p style={S.cardDesc}>{d.description}</p>}
+          <div style={S.cardMeta}>
+            <span>{(d.document_count ?? 0).toLocaleString()} {d.document_count === 1 ? 'document' : 'documents'}</span>
+            {d.last_opened_at && <span>Opened {formatDate(d.last_opened_at)}</span>}
+          </div>
+        </Link>
+      ))}
+    </div>
+  )
+}
+
+const S: Record<string, React.CSSProperties> = {
+  page: { minHeight: '100vh', background: 'var(--bg)' },
+  header: { background: 'var(--surface)', borderBottom: '1px solid var(--border)', padding: '0 32px' },
+  headerInner: { maxWidth: 960, margin: '0 auto', display: 'flex', justifyContent: 'space-between',
+    alignItems: 'center', padding: '24px 0' },
+  logo: { fontSize: 24, fontWeight: 700, color: 'var(--text)', margin: 0, letterSpacing: '-0.02em' },
+  tagline: { fontSize: 13, color: 'var(--text-muted)', margin: '2px 0 0' },
+  newBtn: { display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 24px',
+    background: 'var(--accent)', color: '#fff', borderRadius: 'var(--radius-md)', fontSize: 14,
+    fontWeight: 600, textDecoration: 'none', boxShadow: '0 1px 3px rgba(37,99,235,0.3)' },
+  content: { maxWidth: 960, margin: '0 auto', padding: '32px 32px 64px' },
+  tabs: { display: 'flex', gap: 4, marginBottom: 24, borderBottom: '1px solid var(--border)',
+    paddingBottom: 0 },
+  tab: { display: 'inline-flex', alignItems: 'center', gap: 8, padding: '10px 16px 12px',
+    fontSize: 14, fontWeight: 500, color: 'var(--text-muted)', background: 'none', border: 'none',
+    borderBottom: '2px solid transparent', cursor: 'pointer', marginBottom: -1, transition: 'all 0.15s' },
+  tabActive: { color: 'var(--accent)', borderBottom: '2px solid var(--accent)' },
+  tabCount: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    minWidth: 20, height: 20, padding: '0 6px', fontSize: 11, fontWeight: 600,
+    borderRadius: 10, background: '#f3f4f6', color: 'var(--text-muted)' },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 },
+  card: { display: 'block', background: 'var(--surface)', border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-lg)', padding: 24, textDecoration: 'none', color: 'inherit',
+    transition: 'all 0.2s ease', cursor: 'pointer' },
+  cardTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start',
+    gap: 12, marginBottom: 8 },
+  cardName: { fontSize: 16, fontWeight: 600, color: 'var(--text)', margin: 0, lineHeight: 1.3 },
+  cardDesc: { fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5, margin: '0 0 4px',
+    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const, overflow: 'hidden' },
+  cardMeta: { display: 'flex', alignItems: 'center', gap: 16, paddingTop: 14, marginTop: 12,
+    borderTop: '1px solid var(--border)', fontSize: 12, color: 'var(--text-muted)' },
+  docCount: { fontSize: 12, fontWeight: 600, color: 'var(--text-muted)',
+    background: '#f3f4f6', padding: '2px 8px', borderRadius: 4, whiteSpace: 'nowrap' as const },
+  empty: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center',
+    padding: '80px 32px', textAlign: 'center' as const, gap: 20 },
+  emptyBtn: { display: 'inline-flex', alignItems: 'center', gap: 8, padding: '12px 32px',
+    background: 'var(--accent)', color: '#fff', borderRadius: 'var(--radius-md)',
+    fontSize: 15, fontWeight: 600, textDecoration: 'none' },
+  loading: { display: 'flex', alignItems: 'center', justifyContent: 'center',
+    gap: 12, padding: 64, color: 'var(--text-muted)', fontSize: 14 },
+  spinner: { width: 20, height: 20, border: '2px solid var(--border)',
+    borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.6s linear infinite' },
 }

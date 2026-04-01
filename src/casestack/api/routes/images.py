@@ -13,16 +13,21 @@ router = APIRouter()
 
 
 @router.get("/cases/{slug}/images")
-def list_images(slug: str, offset: int = 0, limit: int = 100):
-    """List extracted images with pagination."""
+def list_images(slug: str, offset: int = 0, limit: int | None = None):
+    """List extracted images. Pass limit= to paginate; omit for all."""
     db_path = get_case_db(slug)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
-            "SELECT * FROM extracted_images ORDER BY document_id, page_number LIMIT ? OFFSET ?",
-            (limit, offset),
-        ).fetchall()
+        if limit is not None:
+            rows = conn.execute(
+                "SELECT * FROM extracted_images ORDER BY document_id, page_number LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM extracted_images ORDER BY document_id, page_number",
+            ).fetchall()
         total = conn.execute("SELECT COUNT(*) FROM extracted_images").fetchone()[0]
         return {"total": total, "images": [dict(r) for r in rows]}
     except Exception:

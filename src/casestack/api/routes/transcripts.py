@@ -13,16 +13,21 @@ router = APIRouter()
 
 
 @router.get("/cases/{slug}/transcripts")
-def list_transcripts(slug: str, offset: int = 0, limit: int = 100):
-    """List all transcripts in the case database."""
+def list_transcripts(slug: str, offset: int = 0, limit: int | None = None):
+    """List all transcripts. Pass limit= to paginate; omit for all."""
     db_path = get_case_db(slug)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(
-            "SELECT * FROM transcripts ORDER BY document_id LIMIT ? OFFSET ?",
-            (limit, offset),
-        ).fetchall()
+        if limit is not None:
+            rows = conn.execute(
+                "SELECT * FROM transcripts ORDER BY document_id LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM transcripts ORDER BY document_id",
+            ).fetchall()
         return [dict(r) for r in rows]
     except Exception:
         return []

@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { fetchJSON } from '../api/client'
 import EntityGraph, {
   type GraphNode,
@@ -47,6 +47,7 @@ type ViewMode = 'directory' | 'graph'
 
 export default function EntityViewer() {
   const { slug = '' } = useParams<{ slug: string }>()
+  const navigate = useNavigate()
 
   /* shared state */
   const [view, setView] = useState<ViewMode>('directory')
@@ -189,7 +190,12 @@ export default function EntityViewer() {
           {/* Entity cards grid */}
           <div style={styles.grid}>
             {pageEntities.map(e => (
-              <div key={e.id} style={styles.card}>
+              <div
+                key={e.id}
+                style={{ ...styles.card, cursor: 'pointer' }}
+                title={`Search for "${e.name}" mentions`}
+                onClick={() => navigate(`/case/${slug}/search?q=${encodeURIComponent(e.name)}`)}
+              >
                 <div style={styles.cardName}>{e.name}</div>
                 <div style={styles.cardMeta}>
                   <span
@@ -202,7 +208,7 @@ export default function EntityViewer() {
                     {e.type}
                   </span>
                   <span style={styles.mentionCount}>
-                    {e.mentions} mention{e.mentions !== 1 ? 's' : ''}
+                    in {e.mentions} doc{e.mentions !== 1 ? 's' : ''}
                   </span>
                 </div>
               </div>
@@ -293,7 +299,7 @@ export default function EntityViewer() {
                       {selectedNode.type}
                     </span>
                     <span style={styles.mentionCount}>
-                      {selectedNode.mentions} mention
+                      in {selectedNode.mentions} doc
                       {selectedNode.mentions !== 1 ? 's' : ''}
                     </span>
                   </div>

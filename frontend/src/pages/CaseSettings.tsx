@@ -10,7 +10,8 @@ interface CaseData {
 }
 
 interface PipelineStep {
-  name: string
+  id: string
+  label: string
   enabled: boolean
   description?: string
 }
@@ -30,6 +31,8 @@ export default function CaseSettings() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [savingPipeline, setSavingPipeline] = useState(false)
+  const [savedPipeline, setSavedPipeline] = useState(false)
   const [error, setError] = useState('')
   const [rerunning, setRerunning] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
@@ -63,6 +66,7 @@ export default function CaseSettings() {
         method: 'PUT',
         body: JSON.stringify({ name, description }),
       })
+      setCaseData(prev => prev ? { ...prev, name, description } : prev)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (err) {
@@ -71,6 +75,30 @@ export default function CaseSettings() {
       setSaving(false)
     }
   }, [slug, name, description, saving])
+
+  const togglePipelineStep = useCallback((index: number) => {
+    setPipeline(prev => prev.map((s, i) => i === index ? { ...s, enabled: !s.enabled } : s))
+    setSavedPipeline(false)
+  }, [])
+
+  const handleSavePipeline = useCallback(async () => {
+    if (!slug || savingPipeline) return
+    setSavingPipeline(true)
+    try {
+      const overrides: Record<string, boolean> = {}
+      pipeline.forEach(s => { overrides[s.id] = s.enabled })
+      await fetchJSON(`/cases/${slug}/pipeline`, {
+        method: 'PUT',
+        body: JSON.stringify({ pipeline: overrides }),
+      })
+      setSavedPipeline(true)
+      setTimeout(() => setSavedPipeline(false), 2000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save pipeline')
+    } finally {
+      setSavingPipeline(false)
+    }
+  }, [slug, pipeline, savingPipeline])
 
   const handleRerunIngest = useCallback(async () => {
     if (!slug || rerunning) return
@@ -155,7 +183,7 @@ export default function CaseSettings() {
           <div style={styles.actions}>
             <button
               onClick={handleSave}
-              disabled={saving || !hasChanges}
+              disabled={saving || (!hasChanges && !saved)}
               style={{
                 ...styles.primaryButton,
                 opacity: saving || !hasChanges ? 0.5 : 1,
@@ -177,26 +205,38 @@ export default function CaseSettings() {
               No pipeline steps configured. Pipeline configuration will appear here after the first ingest run.
             </p>
           ) : (
-            <div style={styles.pipelineList}>
-              {pipeline.map((step, i) => (
-                <div key={i} style={styles.pipelineStep}>
-                  <div style={styles.stepInfo}>
-                    <span style={styles.stepName}>{step.name}</span>
-                    {step.description && (
-                      <span style={styles.stepDescription}>{step.description}</span>
-                    )}
+            <>
+              <div style={styles.pipelineList}>
+                {pipeline.map((step, i) => (
+                  <div key={i} style={styles.pipelineStep}>
+                    <div style={styles.stepInfo}>
+                      <span style={styles.stepName}>{step.description || step.label}</span>
+                    </div>
+                    <button
+                      onClick={() => togglePipelineStep(i)}
+                      style={{
+                        ...styles.stepBadge,
+                        ...(step.enabled ? styles.stepEnabled : styles.stepDisabled),
+                        cursor: 'pointer',
+                        border: 'none',
+                        fontFamily: 'inherit',
+                      }}
+                    >
+                      {step.enabled ? 'Enabled' : 'Disabled'}
+                    </button>
                   </div>
-                  <span
-                    style={{
-                      ...styles.stepBadge,
-                      ...(step.enabled ? styles.stepEnabled : styles.stepDisabled),
-                    }}
-                  >
-                    {step.enabled ? 'Enabled' : 'Disabled'}
-                  </span>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+              <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  onClick={handleSavePipeline}
+                  disabled={savingPipeline}
+                  style={{ ...styles.primaryButton, opacity: savingPipeline ? 0.5 : 1, cursor: savingPipeline ? 'not-allowed' : 'pointer' }}
+                >
+                  {savingPipeline ? 'Saving...' : savedPipeline ? 'Saved!' : 'Save Pipeline'}
+                </button>
+              </div>
+            </>
           )}
         </div>
       </section>

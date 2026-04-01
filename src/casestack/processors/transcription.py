@@ -8,6 +8,7 @@ import logging
 import multiprocessing
 import time
 from pathlib import Path
+from typing import Callable
 
 from rich.progress import (
     BarColumn,
@@ -342,6 +343,7 @@ class TranscriptionProcessor:
         paths: list[Path],
         output_dir: Path,
         max_workers: int = 1,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> list[TranscriptionResult]:
         """Process multiple media files sequentially (GPU memory constraint).
 
@@ -364,6 +366,8 @@ class TranscriptionProcessor:
 
         if skipped:
             logger.info("Transcription resume: %d already processed, %d new", skipped, len(to_process))
+            if progress_callback:
+                progress_callback(skipped, len(paths))
 
         if not to_process:
             return results
@@ -392,5 +396,7 @@ class TranscriptionProcessor:
                     result.model_dump_json(indent=2), encoding="utf-8"
                 )
                 progress.advance(task)
+                if progress_callback:
+                    progress_callback(skipped + len(results), len(paths))
 
         return results

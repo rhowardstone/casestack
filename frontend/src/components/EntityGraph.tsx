@@ -5,6 +5,8 @@ import {
   forceManyBody,
   forceCenter,
   forceCollide,
+  forceX,
+  forceY,
   type SimulationNodeDatum,
   type SimulationLinkDatum,
 } from 'd3-force'
@@ -15,6 +17,7 @@ import { select, pointer } from 'd3-selection'
 
 export interface GraphNode {
   id: string
+  name: string
   type: string
   mentions: number
 }
@@ -54,6 +57,7 @@ function colorFor(type: string): string {
 
 interface SimNode extends SimulationNodeDatum {
   id: string
+  name: string
   type: string
   mentions: number
   radius: number
@@ -84,6 +88,7 @@ export default function EntityGraph({ nodes, edges, onSelectNode }: Props) {
     const maxMentions = Math.max(...nodes.map(n => n.mentions), 1)
     const simNodes: SimNode[] = nodes.map(n => ({
       id: n.id,
+      name: n.name ?? n.id,
       type: n.type,
       mentions: n.mentions,
       radius: 6 + (n.mentions / maxMentions) * 24,
@@ -171,7 +176,7 @@ export default function EntityGraph({ nodes, edges, onSelectNode }: Props) {
       .selectAll<SVGTextElement, SimNode>('text')
       .data(simNodes)
       .join('text')
-      .text((d: SimNode) => d.id)
+      .text((d: SimNode) => d.name)
       .attr('font-size', 11)
       .attr('font-family', 'inherit')
       .attr('fill', 'var(--text)')
@@ -228,6 +233,8 @@ export default function EntityGraph({ nodes, edges, onSelectNode }: Props) {
       .force('charge', forceManyBody().strength(-200))
       .force('center', forceCenter(width / 2, height / 2))
       .force('collide', forceCollide<SimNode>().radius(d => d.radius + 4))
+      .force('x', forceX<SimNode>(width / 2).strength(0.04))
+      .force('y', forceY<SimNode>(height / 2).strength(0.04))
 
     simulation.on('tick', () => {
       linkSel

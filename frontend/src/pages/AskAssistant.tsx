@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
+import { TOP_NAV_HEIGHT } from '../components/Sidebar'
 import { marked } from 'marked'
 import { streamAsk } from '../api/ask'
 import {
@@ -9,6 +10,7 @@ import {
   type Conversation,
   type ConversationMessage,
 } from '../api/conversations'
+import { fetchJSON } from '../api/client'
 import DocumentReader from '../components/DocumentReader'
 
 marked.setOptions({ breaks: true, gfm: true })
@@ -27,19 +29,71 @@ interface Message {
   loading?: boolean
 }
 
-const SUGGESTED_QUESTIONS = [
+interface CaseStats {
+  date_min: string | null
+  date_max: string | null
+  docs_by_year: { year: string; count: number }[]
+  top_entities: { name: string; type: string; count: number }[]
+}
+
+const FALLBACK_QUESTIONS = [
   'What are the key findings in this case?',
   'Who are the main persons mentioned?',
   'Summarize the financial transactions',
 ]
 
+function buildSuggestedQuestions(stats: CaseStats): string[] {
+  const questions: string[] = []
+
+  // Add person-specific questions for top entities
+  const persons = stats.top_entities.filter(e => e.type === 'PERSON').slice(0, 2)
+  for (const p of persons) {
+    questions.push(`Who is ${p.name} and what role do they play in this case?`)
+  }
+
+  // Peak year question
+  if (stats.docs_by_year.length > 0) {
+    const peakYear = stats.docs_by_year.reduce((a, b) => a.count > b.count ? a : b)
+    questions.push(`What was happening in ${peakYear.year}? Why the spike in activity?`)
+  }
+
+  // ORG/GPE entities
+  const places = stats.top_entities.filter(e => e.type === 'GPE' || e.type === 'ORG').slice(0, 1)
+  if (places.length > 0) {
+    questions.push(`What is the significance of ${places[0].name} in this case?`)
+  }
+
+  // Generic fallback questions
+  questions.push('What are the most unusual or suspicious documents?')
+
+  return questions.slice(0, 4)
+}
+
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768)
+  useEffect(() => {
+    const handle = () => setIsMobile(window.innerWidth < 768)
+    window.addEventListener('resize', handle)
+    return () => window.removeEventListener('resize', handle)
+  }, [])
+  return isMobile
+}
+
+// Conversation history sidebar opens by default only when there's room for all three panels
+const SIDEBAR_AUTO_OPEN_WIDTH = 1024
+
 export default function AskAssistant() {
   const { slug = '' } = useParams<{ slug: string }>()
+  const [searchParams] = useSearchParams()
+  const isMobile = useIsMobile()
 
-  // Conversations sidebar state
+  // Corpus-specific suggested questions
+  const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>(FALLBACK_QUESTIONS)
+
+  // Conversations sidebar state — start closed on mobile
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeConvId, setActiveConvId] = useState<string | null>(null)
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= SIDEBAR_AUTO_OPEN_WIDTH)
 
   // Chat state
   const [messages, setMessages] = useState<Message[]>([])
@@ -52,12 +106,26 @@ export default function AskAssistant() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
-  // Load conversation list on mount
+  // Load conversation list on mount; open ?conv=<id> if provided
   useEffect(() => {
+    const convParam = searchParams.get('conv')
     listConversations(slug)
-      .then(setConversations)
+      .then(list => {
+        setConversations(list)
+        if (convParam && list.find(c => c.id === convParam)) {
+          switchConversation(convParam)
+        }
+      })
       .catch(() => {}) // non-fatal
-  }, [slug])
+
+    // Load corpus stats for suggested questions
+    fetchJSON<CaseStats>(`/cases/${slug}/stats`)
+      .then(stats => {
+        const qs = buildSuggestedQuestions(stats)
+        if (qs.length > 0) setSuggestedQuestions(qs)
+      })
+      .catch(() => {}) // non-fatal — fall back to defaults
+  }, [slug]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scroll
   useEffect(() => {
@@ -78,6 +146,13 @@ export default function AskAssistant() {
         content: m.content,
         sources: m.sources_json ? JSON.parse(m.sources_json) : undefined,
       }))
+      // If the last message is from the user with no assistant reply, the response was lost
+      if (loaded.length > 0 && loaded[loaded.length - 1].role === 'user') {
+        loaded.push({
+          role: 'assistant',
+          content: '*Response was not saved — this conversation may have been interrupted. You can ask again below.*',
+        })
+      }
       setMessages(loaded)
     } catch {
       // ignore
@@ -216,74 +291,95 @@ export default function AskAssistant() {
     }
   }
 
-  return (
-    <div style={styles.root}>
-      {/* Sidebar — full (240px) or collapsed icon-strip (48px) */}
-      <div style={sidebarOpen ? styles.sidebar : styles.sidebarCollapsed}>
-        {sidebarOpen ? (
-          <>
-            <div style={styles.sidebarHeader}>
-              <button style={styles.newChatBtn} onClick={startNewChat}>
-                + New chat
-              </button>
-            </div>
-            <div style={styles.convList}>
-              {conversations.length === 0 && (
-                <div style={styles.convEmpty}>No conversations yet</div>
-              )}
-              {conversations.map(conv => (
-                <div
-                  key={conv.id}
-                  style={{
-                    ...styles.convItem,
-                    ...(conv.id === activeConvId ? styles.convItemActive : {}),
-                  }}
-                  onClick={() => switchConversation(conv.id)}
-                >
-                  <span style={styles.convTitle}>
-                    {conv.title || 'Untitled'}
-                  </span>
-                  <button
-                    style={styles.convDelete}
-                    onClick={e => handleDeleteConversation(conv.id, e)}
-                    title="Delete"
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-          </>
-        ) : (
-          <div style={styles.sidebarIconStrip}>
-            <button
-              style={styles.iconStripNewChat}
-              onClick={startNewChat}
-              title="New chat"
-            >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-                <path d="M8 2a.5.5 0 0 1 .5.5v5h5a.5.5 0 0 1 0 1h-5v5a.5.5 0 0 1-1 0v-5h-5a.5.5 0 0 1 0-1h5v-5A.5.5 0 0 1 8 2"/>
-              </svg>
-            </button>
-          </div>
+  const sidebarContent = (
+    <>
+      <div style={styles.sidebarHeader}>
+        {/* Toggle button lives here when sidebar is open */}
+        <button
+          style={styles.sidebarToggleInner}
+          onClick={() => setSidebarOpen(false)}
+          title="Close sidebar"
+        >
+          <SidebarIcon />
+        </button>
+        <button
+          style={styles.newChatIconBtn}
+          onClick={() => { startNewChat(); if (isMobile) setSidebarOpen(false) }}
+          title="New chat"
+        >
+          <ComposeIcon />
+        </button>
+        {isMobile && (
+          <button style={styles.sidebarCloseBtn} onClick={() => setSidebarOpen(false)} title="Close">
+            ✕
+          </button>
         )}
       </div>
+      <div style={styles.convList}>
+        {conversations.length === 0 && (
+          <div style={styles.convEmpty}>No conversations yet</div>
+        )}
+        {conversations.map(conv => (
+          <div
+            key={conv.id}
+            style={{
+              ...styles.convItem,
+              ...(conv.id === activeConvId ? styles.convItemActive : {}),
+            }}
+            onClick={() => { switchConversation(conv.id); if (isMobile) setSidebarOpen(false) }}
+          >
+            <span style={styles.convTitle}>
+              {conv.title || 'Untitled'}
+            </span>
+            <button
+              style={styles.convDelete}
+              onClick={e => handleDeleteConversation(conv.id, e)}
+              title="Delete"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
+    </>
+  )
+
+  return (
+    <div style={{ ...styles.root, height: `calc(100dvh - ${TOP_NAV_HEIGHT}px)` }}>
+      {/* Mobile backdrop */}
+      {isMobile && sidebarOpen && (
+        <div style={styles.backdrop} onClick={() => setSidebarOpen(false)} />
+      )}
+
+      {/* Sidebar — inline on desktop, overlay drawer on mobile */}
+      {isMobile ? (
+        sidebarOpen && (
+          <div style={styles.sidebarOverlay}>
+            {sidebarContent}
+          </div>
+        )
+      ) : (
+        sidebarOpen && (
+          <div style={styles.sidebar}>
+            {sidebarContent}
+          </div>
+        )
+      )}
 
       {/* Main chat area */}
       <div style={styles.main}>
         {/* Top bar */}
         <div style={styles.topBar}>
-          <button
-            style={styles.sidebarToggle}
-            onClick={() => setSidebarOpen(p => !p)}
-            title={sidebarOpen ? 'Hide history' : 'Show history'}
-          >
-            {sidebarOpen ? (
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0z"/></svg>
-            ) : (
-              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M4.646 1.646a.5.5 0 0 1 .708 0l6 6a.5.5 0 0 1 0 .708l-6 6a.5.5 0 0 1-.708-.708L10.293 8 4.646 2.354a.5.5 0 0 1 0-.708z"/></svg>
-            )}
-          </button>
+          {/* Show sidebar toggle here only when the sidebar is hidden */}
+          {(!sidebarOpen || isMobile) && (
+            <button
+              style={styles.sidebarToggle}
+              onClick={() => setSidebarOpen(p => !p)}
+              title="Show history"
+            >
+              <SidebarIcon />
+            </button>
+          )}
           <h1 style={styles.title}>AI Research Assistant</h1>
         </div>
 
@@ -299,7 +395,7 @@ export default function AskAssistant() {
               <div style={styles.emptyTitle}>Ask a question</div>
               <div style={styles.emptyHint}>Try questions like:</div>
               <div style={styles.suggestions}>
-                {SUGGESTED_QUESTIONS.map((q, i) => (
+                {suggestedQuestions.map((q, i) => (
                   <button
                     key={i}
                     style={styles.suggestionBtn}
@@ -342,36 +438,32 @@ export default function AskAssistant() {
                   <div
                     style={styles.messageContent}
                     className="markdown-content"
-                    dangerouslySetInnerHTML={{ __html: marked.parse(msg.content) as string }}
+                    onClick={(e) => {
+                      const target = e.target as HTMLElement
+                      if (target.classList.contains('inline-cite')) {
+                        const docId = target.dataset.doc
+                        const page = parseInt(target.dataset.page ?? '1', 10)
+                        if (docId) {
+                          const src = msg.sources?.find(s => s.doc_id === docId)
+                          setViewerDoc(prev => {
+                            const next = prev?.docId === docId && prev?.page === page
+                              ? null
+                              : { docId, page, title: src?.title ?? docId }
+                            // collapse the conv sidebar when opening viewer so chat stays readable
+                            if (next && !isMobile) setSidebarOpen(false)
+                            return next
+                          })
+                        }
+                      }
+                    }}
+                    dangerouslySetInnerHTML={{
+                      __html: marked.parse(
+                        msg.role === 'assistant' && msg.sources?.length
+                          ? processCitations(msg.content, msg.sources)
+                          : msg.content
+                      ) as string,
+                    }}
                   />
-                )}
-                {msg.sources && msg.sources.length > 0 && (
-                  <div style={styles.sourcesSection}>
-                    <div style={styles.sourcesLabel}>Sources:</div>
-                    <div style={styles.sourceChips}>
-                      {deduplicateSources(msg.sources).map((src, j) => (
-                        <button
-                          key={j}
-                          style={{
-                            ...styles.sourceChip,
-                            cursor: 'pointer',
-                            border: 'none',
-                            ...(viewerDoc?.docId === src.doc_id ? styles.sourceChipActive : {}),
-                          }}
-                          onClick={() =>
-                            setViewerDoc(prev =>
-                              prev?.docId === src.doc_id && prev?.page === src.page
-                                ? null
-                                : { docId: src.doc_id, page: src.page, title: src.title }
-                            )
-                          }
-                          title="Open document"
-                        >
-                          {src.title} [p.{src.page}]
-                        </button>
-                      ))}
-                    </div>
-                  </div>
                 )}
               </div>
             </div>
@@ -426,21 +518,81 @@ export default function AskAssistant() {
               initialPage={viewerDoc.page}
             />
           </div>
+
         </div>
       )}
     </div>
   )
 }
 
-function deduplicateSources(sources: Source[]): Source[] {
-  const seen = new Set<string>()
-  return sources.filter(s => {
-    const key = `${s.doc_id}:${s.page}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
+/**
+ * Replace [DOC-ID, page N] or [DOC-ID1, page N; DOC-ID2, page N] patterns in
+ * the LLM response with clickable inline citation chips.
+ *
+ * The pattern produced by the model is:  [eml-abc123, page 1]
+ * Multi-citation:  [eml-abc, page 1; eml-def, page 2]
+ * We inject <span class="inline-cite"> elements; clicks are caught via event
+ * delegation on the parent div.
+ */
+function processCitations(text: string, sources: Source[]): string {
+  const srcMap = new Map(sources.map(s => [s.doc_id, s]))
+
+  function makeChip(docId: string, page: number): string {
+    const src = srcMap.get(docId)
+    const title = src?.title ?? docId
+    const label = title.length > 22 ? title.slice(0, 22) + '…' : title
+    return `<span class="inline-cite" data-doc="${docId}" data-page="${page}" title="${title} — page ${page}">${label} p.${page}</span>`
+  }
+
+  function processPart(part: string): string {
+    const trimmed = part.trim()
+    // Standard format: [doc-id, page N]
+    const pageMatch = trimmed.match(/^([a-z0-9_\-]+),\s*page\s*(\d+)/i)
+    if (pageMatch) return makeChip(pageMatch[1], parseInt(pageMatch[2], 10))
+
+    // Legacy email format: [doc-id, From: ... → ..., date] — extract just the doc-id
+    const docIdMatch = trimmed.match(/^([a-z0-9_\-]+),\s*/i)
+    if (docIdMatch && srcMap.has(docIdMatch[1])) {
+      const src = srcMap.get(docIdMatch[1])!
+      return makeChip(docIdMatch[1], src.page)
+    }
+
+    return `[${part}]`
+  }
+
+  // Match brackets containing what looks like one or more doc-id citations
+  // Handles both [doc-id, page N] and [doc-id, anything; doc-id, anything] patterns
+  return text.replace(
+    /\[([a-z0-9_\-]+,\s*(?:page\s*\d+|[^\]]+?)(?:\s*;\s*[a-z0-9_\-]+,\s*(?:page\s*\d+|[^\]]+?))*)\]/gi,
+    (_match, inner) => {
+      const parts = inner.split(/\s*;\s*/)
+      const chips = parts.map(processPart)
+      // Only replace if at least one chip was actually created
+      return chips.some(c => c.includes('inline-cite')) ? chips.join('') : _match
+    },
+  )
 }
+
+// Sidebar panel icon (two-column layout with left panel)
+function SidebarIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+      <line x1="9" y1="3" x2="9" y2="21" />
+    </svg>
+  )
+}
+
+// Compose / new chat icon (pencil on paper)
+function ComposeIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+    </svg>
+  )
+}
+
 
 // ---------------------------------------------------------------------------
 // Styles
@@ -449,11 +601,48 @@ function deduplicateSources(sources: Source[]): Source[] {
 const styles: Record<string, React.CSSProperties> = {
   root: {
     display: 'flex',
+    // height is set dynamically inline (100dvh on mobile, calc(100vh-64px) on desktop)
     height: 'calc(100vh - 64px)',
     overflow: 'hidden',
+    position: 'relative',
   },
 
-  // Sidebar
+  // Mobile overlay backdrop
+  backdrop: {
+    position: 'fixed',
+    inset: 0,
+    background: 'rgba(0,0,0,0.4)',
+    zIndex: 99,
+  },
+
+  // Mobile slide-over drawer
+  sidebarOverlay: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    bottom: 0,
+    width: 280,
+    maxWidth: '85vw',
+    background: 'var(--surface)',
+    borderRight: '1px solid var(--border)',
+    display: 'flex',
+    flexDirection: 'column' as const,
+    overflow: 'hidden',
+    zIndex: 100,
+  },
+
+  sidebarCloseBtn: {
+    background: 'none',
+    border: 'none',
+    fontSize: 18,
+    cursor: 'pointer',
+    color: 'var(--text-muted)',
+    padding: '0 4px',
+    lineHeight: 1,
+    flexShrink: 0,
+  },
+
+  // Desktop inline sidebar
   sidebar: {
     width: 240,
     minWidth: 240,
@@ -463,49 +652,39 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'var(--surface)',
     overflow: 'hidden',
   },
-  sidebarCollapsed: {
-    width: 48,
-    minWidth: 48,
-    borderRight: '1px solid var(--border)',
+  sidebarHeader: {
     display: 'flex',
-    flexDirection: 'column' as const,
-    background: 'var(--surface)',
-    overflow: 'hidden',
-  },
-  sidebarIconStrip: {
-    display: 'flex',
-    flexDirection: 'column' as const,
     alignItems: 'center',
-    padding: '12px 0',
-    gap: 8,
+    gap: 4,
+    padding: '10px 10px 10px 12px',
+    borderBottom: '1px solid var(--border)',
   },
-  iconStripNewChat: {
+  // Toggle button that lives inside the sidebar header when open
+  sidebarToggleInner: {
     background: 'none',
-    border: '1px solid var(--border)',
+    border: 'none',
     borderRadius: 6,
-    padding: '6px',
+    padding: '5px 6px',
     cursor: 'pointer',
     color: 'var(--text-muted)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
-  sidebarHeader: {
-    padding: '12px 12px 8px',
-    borderBottom: '1px solid var(--border)',
-  },
-  newChatBtn: {
-    width: '100%',
-    padding: '8px 12px',
-    fontSize: 13,
-    fontWeight: 600,
-    fontFamily: 'inherit',
-    background: 'var(--accent)',
-    color: '#fff',
+  // New chat icon button (compose icon)
+  newChatIconBtn: {
+    marginLeft: 'auto',
+    background: 'none',
     border: 'none',
     borderRadius: 6,
+    padding: '5px 6px',
     cursor: 'pointer',
-    textAlign: 'left',
+    color: 'var(--text-muted)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   convList: {
     flex: 1,
@@ -563,19 +742,23 @@ const styles: Record<string, React.CSSProperties> = {
   topBar: {
     display: 'flex',
     alignItems: 'center',
-    gap: 12,
-    padding: '16px 24px 12px',
+    gap: 10,
+    padding: '12px 20px',
     borderBottom: '1px solid var(--border)',
+    minHeight: 52,
   },
+  // Toggle button shown in the topBar only when sidebar is closed
   sidebarToggle: {
     background: 'none',
-    border: '1px solid var(--border)',
+    border: 'none',
     borderRadius: 6,
-    padding: '4px 8px',
+    padding: '5px 6px',
     cursor: 'pointer',
-    fontSize: 12,
     color: 'var(--text-muted)',
-    fontFamily: 'inherit',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   title: {
     fontSize: 20,
@@ -751,8 +934,9 @@ const styles: Record<string, React.CSSProperties> = {
   },
   viewerBody: {
     flex: 1,
-    overflow: 'auto',
-    padding: 20,
+    overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column' as const,
   },
 
   // Input
